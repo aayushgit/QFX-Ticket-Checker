@@ -1,3 +1,5 @@
 venv
 qfxscraper.py
 qfx.sh
+celerybeat-schedule
+celerybeat.pid

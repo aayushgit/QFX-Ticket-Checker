@@ -39,12 +39,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'QFXTickets',
-    'djcelery',
 ]
-
-import djcelery
-djcelery.setup_loader()
-# BROKER_URL = "django://"
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -139,9 +134,9 @@ CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Asia/Nepal'
 CELERY_BEAT_SCHEDULE = {
-    'task-number-one':{
+    'add':{
         'task': 'QFXTickets.tasks.add',
-        'schedule': crontab(minute=59, hour=23)
+        'schedule': crontab(minute=1)
     }
 }
 
