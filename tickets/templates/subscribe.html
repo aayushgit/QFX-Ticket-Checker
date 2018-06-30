@@ -1,0 +1,18 @@
+{% extends 'base.html' %}
+<head>
+    <script type="text/javascript">
+        function checkEmail(){
+
+        }
+    </script>
+</head>
+{% block content %}
+<div class="container">
+    <h2>Subscribe Here</h2>
+    <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button type="submit">Subscribe</button>
+    </form>
+</div>
+{% endblock %}
