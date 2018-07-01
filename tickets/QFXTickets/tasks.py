@@ -2,17 +2,27 @@ from __future__ import absolute_import, unicode_literals
 from .models import NowShowing
 from .models import Emails
 from celery import task
-
+from django.core.mail import send_mass_mail
 from bs4 import BeautifulSoup
 import urllib.request
 class AppURLOpener(urllib.request.FancyURLopener):
     version = "Mozilla/5.0"
 
 def sendEmail(movietitle):
-    for mv in movietitle:
-        movie = NowShowing.objects.get(movie_title=mv)
+    if movietitle:
+        messages = []
+        subject = "New Movie Arrival"
+        content = "Movie Tickets available for \n"
+        for mv in movietitle:
+            movie = NowShowing.objects.get(movie_title=mv)
+            content = content + mv + " Book at:  " + movie.movie_link
+
         emails = Emails.objects.all()
         mailList = emails.email
+        for i in range(len(mailList)):
+            messages[i] = (subject, content, mailList[i])
+
+        send_mass_mail(messages, fail_silently=False)
 
 @task()
 def getNowShowing():
