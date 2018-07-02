@@ -1,29 +1,27 @@
 # -*- coding: utf-8 -*-
-"""
-    celery.events.dumper
-    ~~~~~~~~~~~~~~~~~~~~
+"""Utility to dump events to screen.
 
-    This is a simple program that dumps events to the console
-    as they happen. Think of it like a `tcpdump` for Celery events.
-
+This is a simple program that dumps events to the console
+as they happen.  Think of it like a `tcpdump` for Celery events.
 """
-from __future__ import absolute_import, print_function
+from __future__ import absolute_import, print_function, unicode_literals
 
 import sys
-
 from datetime import datetime
 
 from celery.app import app_or_default
 from celery.utils.functional import LRUCache
-from celery.utils.timeutils import humanize_seconds
+from celery.utils.time import humanize_seconds
 
-__all__ = ['Dumper', 'evdump']
+__all__ = ('Dumper', 'evdump')
 
 TASK_NAMES = LRUCache(limit=0xFFF)
 
-HUMAN_TYPES = {'worker-offline': 'shutdown',
-               'worker-online': 'started',
-               'worker-heartbeat': 'heartbeat'}
+HUMAN_TYPES = {
+    'worker-offline': 'shutdown',
+    'worker-online': 'started',
+    'worker-heartbeat': 'heartbeat',
+}
 
 CONNECTION_ERROR = """\
 -> Cannot connect to %s: %s.
@@ -39,6 +37,7 @@ def humanize_type(type):
 
 
 class Dumper(object):
+    """Monitor events."""
 
     def __init__(self, out=sys.stdout):
         self.out = out
@@ -48,7 +47,7 @@ class Dumper(object):
         # need to flush so that output can be piped.
         try:
             self.out.flush()
-        except AttributeError:
+        except AttributeError:  # pragma: no cover
             pass
 
     def on_event(self, ev):
@@ -85,10 +84,11 @@ class Dumper(object):
 
 
 def evdump(app=None, out=sys.stdout):
+    """Start event dump."""
     app = app_or_default(app)
     dumper = Dumper(out=out)
     dumper.say('-> evdump: starting capture...')
-    conn = app.connection().clone()
+    conn = app.connection_for_read().clone()
 
     def _error_handler(exc, interval):
         dumper.say(CONNECTION_ERROR % (
@@ -104,6 +104,7 @@ def evdump(app=None, out=sys.stdout):
             return conn and conn.close()
         except conn.connection_errors + conn.channel_errors:
             dumper.say('-> Connection lost, attempting reconnect')
+
 
 if __name__ == '__main__':  # pragma: no cover
     evdump()

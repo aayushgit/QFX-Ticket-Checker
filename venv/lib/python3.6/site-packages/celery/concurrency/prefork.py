@@ -1,21 +1,19 @@
 # -*- coding: utf-8 -*-
-"""
-    celery.concurrency.prefork
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~
+"""Prefork execution pool.
 
-    Pool implementation using :mod:`multiprocessing`.
-
+Pool implementation using :mod:`multiprocessing`.
 """
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals
 
 import os
 
 from billiard import forking_enable
-from billiard.pool import RUN, CLOSE, Pool as BlockingPool
+from billiard.common import REMAP_SIGTERM, TERM_SIGNAME
+from billiard.pool import CLOSE, RUN
+from billiard.pool import Pool as BlockingPool
 
-from celery import platforms
-from celery import signals
-from celery._state import set_default_app, _set_task_join_will_block
+from celery import platforms, signals
+from celery._state import _set_task_join_will_block, set_default_app
 from celery.app import trace
 from celery.concurrency.base import BasePool
 from celery.five import items
@@ -24,17 +22,18 @@ from celery.utils.log import get_logger
 
 from .asynpool import AsynPool
 
-__all__ = ['TaskPool', 'process_initializer', 'process_destructor']
+__all__ = ('TaskPool', 'process_initializer', 'process_destructor')
 
 #: List of signals to reset when a child process starts.
-WORKER_SIGRESET = frozenset(['SIGTERM',
-                             'SIGHUP',
-                             'SIGTTIN',
-                             'SIGTTOU',
-                             'SIGUSR1'])
+WORKER_SIGRESET = {
+    'SIGTERM', 'SIGHUP', 'SIGTTIN', 'SIGTTOU', 'SIGUSR1',
+}
 
 #: List of signals to ignore when a child process starts.
-WORKER_SIGIGNORE = frozenset(['SIGINT'])
+if REMAP_SIGTERM:
+    WORKER_SIGIGNORE = {'SIGINT', TERM_SIGNAME}
+else:
+    WORKER_SIGIGNORE = {'SIGINT'}
 
 logger = get_logger(__name__)
 warning, debug = logger.warning, logger.debug
@@ -43,17 +42,15 @@ warning, debug = logger.warning, logger.debug
 def process_initializer(app, hostname):
     """Pool child process initializer.
 
-    This will initialize a child pool process to ensure the correct
-    app instance is used and things like
-    logging works.
-
+    Initialize the child pool process to ensure the correct
+    app instance is used and things like logging works.
     """
     _set_task_join_will_block(True)
     platforms.signals.reset(*WORKER_SIGRESET)
     platforms.signals.ignore(*WORKER_SIGIGNORE)
     platforms.set_mp_process_title('celeryd', hostname=hostname)
     # This is for Windows and other platforms not supporting
-    # fork(). Note that init_worker makes sure it's only
+    # fork().  Note that init_worker makes sure it's only
     # run once per process.
     app.loader.init_worker()
     app.loader.init_worker_process()
@@ -68,7 +65,7 @@ def process_initializer(app, hostname):
                   hostname=hostname)
     if os.environ.get('FORKED_BY_MULTIPROCESSING'):
         # pool did execv after fork
-        trace.setup_worker_optimizations(app)
+        trace.setup_worker_optimizations(app, hostname)
     else:
         app.set_current()
         set_default_app(app)
@@ -85,10 +82,9 @@ def process_initializer(app, hostname):
 
 
 def process_destructor(pid, exitcode):
-    """Pool child process destructor
+    """Pool child process destructor.
 
     Dispatch the :signal:`worker_process_shutdown` signal.
-
     """
     signals.worker_process_shutdown.send(
         sender=None, pid=pid, exitcode=exitcode,
@@ -97,6 +93,7 @@ def process_destructor(pid, exitcode):
 
 class TaskPool(BasePool):
     """Multiprocessing Pool implementation."""
+
     Pool = AsynPool
     BlockingPool = BlockingPool
 
@@ -104,17 +101,13 @@ class TaskPool(BasePool):
     write_stats = None
 
     def on_start(self):
-        """Run the task pool.
-
-        Will pre-fork all workers so they're ready to accept tasks.
-
-        """
         forking_enable(self.forking_enable)
         Pool = (self.BlockingPool if self.options.get('threads', True)
                 else self.Pool)
         P = self._pool = Pool(processes=self.limit,
                               initializer=process_initializer,
                               on_process_exit=process_destructor,
+                              enable_timeouts=True,
                               synack=False,
                               **self.options)
 
@@ -158,11 +151,7 @@ class TaskPool(BasePool):
             self._pool.close()
 
     def _get_info(self):
-        try:
-            write_stats = self._pool.human_write_stats
-        except AttributeError:
-            def write_stats():
-                return 'N/A'  # only supported by asynpool
+        write_stats = getattr(self._pool, 'human_write_stats', None)
         return {
             'max-concurrency': self.limit,
             'processes': [p.pid for p in self._pool._pool],
@@ -170,7 +159,7 @@ class TaskPool(BasePool):
             'put-guarded-by-semaphore': self.putlocks,
             'timeouts': (self._pool.soft_timeout or 0,
                          self._pool.timeout or 0),
-            'writes': write_stats()
+            'writes': write_stats() if write_stats is not None else 'N/A',
         }
 
     @property

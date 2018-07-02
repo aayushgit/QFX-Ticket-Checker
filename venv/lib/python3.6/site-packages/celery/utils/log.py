@@ -1,12 +1,6 @@
 # -*- coding: utf-8 -*-
-"""
-    celery.utils.log
-    ~~~~~~~~~~~~~~~~
-
-    Logging utilities.
-
-"""
-from __future__ import absolute_import, print_function
+"""Logging utilities."""
+from __future__ import absolute_import, print_function, unicode_literals
 
 import logging
 import numbers
@@ -14,27 +8,30 @@ import os
 import sys
 import threading
 import traceback
-
 from contextlib import contextmanager
-from billiard import current_process, util as mputil
-from kombu.five import values
-from kombu.log import get_logger as _get_logger, LOG_LEVELS
+
+from kombu.five import PY3, values
+from kombu.log import LOG_LEVELS
+from kombu.log import get_logger as _get_logger
 from kombu.utils.encoding import safe_str
 
 from celery.five import string_t, text_t
 
 from .term import colored
 
-__all__ = ['ColorFormatter', 'LoggingProxy', 'base_logger',
-           'set_in_sighandler', 'in_sighandler', 'get_logger',
-           'get_task_logger', 'mlevel', 'ensure_process_aware_logger',
-           'get_multiprocessing_logger', 'reset_multiprocessing_logger']
+__all__ = (
+    'ColorFormatter', 'LoggingProxy', 'base_logger',
+    'set_in_sighandler', 'in_sighandler', 'get_logger',
+    'get_task_logger', 'mlevel',
+    'get_multiprocessing_logger', 'reset_multiprocessing_logger',
+)
 
 _process_aware = False
-PY3 = sys.version_info[0] == 3
+_in_sighandler = False
 
 MP_LOG = os.environ.get('MP_LOG', False)
 
+RESERVED_LOGGER_NAMES = {'celery', 'celery.task'}
 
 # Sets up our logging hierarchy.
 #
@@ -42,12 +39,10 @@ MP_LOG = os.environ.get('MP_LOG', False)
 # logger, and every task logger inherits from the "celery.task"
 # logger.
 base_logger = logger = _get_logger('celery')
-mp_logger = _get_logger('multiprocessing')
-
-_in_sighandler = False
 
 
 def set_in_sighandler(value):
+    """Set flag signifiying that we're inside a signal handler."""
     global _in_sighandler
     _in_sighandler = value
 
@@ -56,11 +51,11 @@ def iter_open_logger_fds():
     seen = set()
     loggers = (list(values(logging.Logger.manager.loggerDict)) +
                [logging.getLogger(None)])
-    for logger in loggers:
+    for l in loggers:
         try:
-            for handler in logger.handlers:
+            for handler in l.handlers:
                 try:
-                    if handler not in seen:
+                    if handler not in seen:  # pragma: no cover
                         yield handler.stream
                         seen.add(handler)
                 except AttributeError:
@@ -71,6 +66,7 @@ def iter_open_logger_fds():
 
 @contextmanager
 def in_sighandler():
+    """Context that records that we are in a signal handler."""
     set_in_sighandler(True)
     try:
         yield
@@ -86,45 +82,60 @@ def logger_isa(l, p, max=1000):
         else:
             if this in seen:
                 raise RuntimeError(
-                    'Logger {0!r} parents recursive'.format(l),
+                    'Logger {0!r} parents recursive'.format(l.name),
                 )
             seen.add(this)
             this = this.parent
             if not this:
                 break
-    else:
+    else:  # pragma: no cover
         raise RuntimeError('Logger hierarchy exceeds {0}'.format(max))
     return False
 
 
+def _using_logger_parent(parent_logger, logger_):
+    if not logger_isa(logger_, parent_logger):
+        logger_.parent = parent_logger
+    return logger_
+
+
 def get_logger(name):
+    """Get logger by name."""
     l = _get_logger(name)
     if logging.root not in (l, l.parent) and l is not base_logger:
-        if not logger_isa(l, base_logger):
-            l.parent = base_logger
+        l = _using_logger_parent(base_logger, l)
     return l
+
+
 task_logger = get_logger('celery.task')
 worker_logger = get_logger('celery.worker')
 
 
 def get_task_logger(name):
-    logger = get_logger(name)
-    if not logger_isa(logger, task_logger):
-        logger.parent = task_logger
-    return logger
+    """Get logger for task module by name."""
+    if name in RESERVED_LOGGER_NAMES:
+        raise RuntimeError('Logger name {0!r} is reserved!'.format(name))
+    return _using_logger_parent(task_logger, get_logger(name))
 
 
 def mlevel(level):
+    """Convert level name/int to log level."""
     if level and not isinstance(level, numbers.Integral):
         return LOG_LEVELS[level.upper()]
     return level
 
 
 class ColorFormatter(logging.Formatter):
+    """Logging formatter that adds colors based on severity."""
+
     #: Loglevel -> Color mapping.
     COLORS = colored().names
-    colors = {'DEBUG': COLORS['blue'], 'WARNING': COLORS['yellow'],
-              'ERROR': COLORS['red'], 'CRITICAL': COLORS['magenta']}
+    colors = {
+        'DEBUG': COLORS['blue'],
+        'WARNING': COLORS['yellow'],
+        'ERROR': COLORS['red'],
+        'CRITICAL': COLORS['magenta'],
+    }
 
     def __init__(self, fmt=None, use_color=True):
         logging.Formatter.__init__(self, fmt)
@@ -155,9 +166,9 @@ class ColorFormatter(logging.Formatter):
                     if isinstance(msg, string_t):
                         return text_t(color(safe_str(msg)))
                     return safe_str(color(msg))
-                except UnicodeDecodeError:
+                except UnicodeDecodeError:  # pragma: no cover
                     return safe_str(msg)  # skip colors
-            except Exception as exc:
+            except Exception as exc:  # pylint: disable=broad-except
                 prev_msg, record.exc_info, record.msg = (
                     record.msg, 1, '<Unrepresentable {0!r}: {1!r}>'.format(
                         type(msg), exc
@@ -174,10 +185,11 @@ class ColorFormatter(logging.Formatter):
 class LoggingProxy(object):
     """Forward file object to :class:`logging.Logger` instance.
 
-    :param logger: The :class:`logging.Logger` instance to forward to.
-    :param loglevel: Loglevel to use when writing messages.
-
+    Arguments:
+        logger (~logging.Logger): Logger instance to forward to.
+        loglevel (int, str): Log level to use when logging messages.
     """
+
     mode = 'w'
     name = None
     closed = False
@@ -185,31 +197,26 @@ class LoggingProxy(object):
     _thread = threading.local()
 
     def __init__(self, logger, loglevel=None):
+        # pylint: disable=redefined-outer-name
+        # Note that the logger global is redefined here, be careful changing.
         self.logger = logger
         self.loglevel = mlevel(loglevel or self.logger.level or self.loglevel)
         self._safewrap_handlers()
 
     def _safewrap_handlers(self):
-        """Make the logger handlers dump internal errors to
-        `sys.__stderr__` instead of `sys.stderr` to circumvent
-        infinite loops."""
+        # Make the logger handlers dump internal errors to
+        # :data:`sys.__stderr__` instead of :data:`sys.stderr` to circumvent
+        # infinite loops.
 
         def wrap_handler(handler):                  # pragma: no cover
 
             class WithSafeHandleError(logging.Handler):
 
                 def handleError(self, record):
-                    exc_info = sys.exc_info()
                     try:
-                        try:
-                            traceback.print_exception(exc_info[0],
-                                                      exc_info[1],
-                                                      exc_info[2],
-                                                      None, sys.__stderr__)
-                        except IOError:
-                            pass    # see python issue 5971
-                    finally:
-                        del(exc_info)
+                        traceback.print_exc(None, sys.__stderr__)
+                    except IOError:
+                        pass    # see python issue 5971
 
             handler.handleError = WithSafeHandleError().handleError
         return [wrap_handler(h) for h in self.logger.handlers]
@@ -230,72 +237,60 @@ class LoggingProxy(object):
                 self._thread.recurse_protection = False
 
     def writelines(self, sequence):
-        """`writelines(sequence_of_strings) -> None`.
-
-        Write the strings to the file.
+        # type: (Sequence[str]) -> None
+        """Write list of strings to file.
 
         The sequence can be any iterable object producing strings.
         This is equivalent to calling :meth:`write` for each string.
-
         """
         for part in sequence:
             self.write(part)
 
     def flush(self):
-        """This object is not buffered so any :meth:`flush` requests
-        are ignored."""
+        # This object is not buffered so any :meth:`flush`
+        # requests are ignored.
         pass
 
     def close(self):
-        """When the object is closed, no write requests are forwarded to
-        the logging object anymore."""
+        # when the object is closed, no write requests are
+        # forwarded to the logging object anymore.
         self.closed = True
 
     def isatty(self):
-        """Always return :const:`False`. Just here for file support."""
+        """Here for file support."""
         return False
 
 
-def ensure_process_aware_logger(force=False):
-    """Make sure process name is recorded when loggers are used."""
-    global _process_aware
-    if force or not _process_aware:
-        logging._acquireLock()
-        try:
-            _process_aware = True
-            Logger = logging.getLoggerClass()
-            if getattr(Logger, '_process_aware', False):  # pragma: no cover
-                return
-
-            class ProcessAwareLogger(Logger):
-                _signal_safe = True
-                _process_aware = True
-
-                def makeRecord(self, *args, **kwds):
-                    record = Logger.makeRecord(self, *args, **kwds)
-                    record.processName = current_process()._name
-                    return record
-
-                def log(self, *args, **kwargs):
-                    if _in_sighandler:
-                        return
-                    return Logger.log(self, *args, **kwargs)
-            logging.setLoggerClass(ProcessAwareLogger)
-        finally:
-            logging._releaseLock()
-
-
 def get_multiprocessing_logger():
-    return mputil.get_logger() if mputil else None
+    """Return the multiprocessing logger."""
+    try:
+        from billiard import util
+    except ImportError:  # pragma: no cover
+        pass
+    else:
+        return util.get_logger()
 
 
 def reset_multiprocessing_logger():
-    if mputil and hasattr(mputil, '_logger'):
-        mputil._logger = None
+    """Reset multiprocessing logging setup."""
+    try:
+        from billiard import util
+    except ImportError:  # pragma: no cover
+        pass
+    else:
+        if hasattr(util, '_logger'):  # pragma: no cover
+            util._logger = None
+
+
+def current_process():
+    try:
+        from billiard import process
+    except ImportError:  # pragma: no cover
+        pass
+    else:
+        return process.current_process()
 
 
 def current_process_index(base=1):
-    if current_process:
-        index = getattr(current_process(), 'index', None)
-        return index + base if index is not None else index
-ensure_process_aware_logger()
+    index = getattr(current_process(), 'index', None)
+    return index + base if index is not None else index

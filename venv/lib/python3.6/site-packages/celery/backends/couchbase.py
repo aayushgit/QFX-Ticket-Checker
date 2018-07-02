@@ -1,15 +1,20 @@
 # -*- coding: utf-8 -*-
-"""
-    celery.backends.couchbase
-    ~~~~~~~~~~~~~~~~~~~~~~~~~
-
-    CouchBase result store backend.
-
-"""
-from __future__ import absolute_import
+"""Couchbase result store backend."""
+from __future__ import absolute_import, unicode_literals
 
 import logging
 
+from kombu.utils.encoding import str_t
+from kombu.utils.url import _parse_url
+
+from celery.exceptions import ImproperlyConfigured
+
+from .base import KeyValueStoreBackend
+
+try:
+    import couchbase_ffi  # noqa
+except ImportError:
+    pass  # noqa
 try:
     from couchbase import Couchbase
     from couchbase.connection import Connection
@@ -17,45 +22,36 @@ try:
 except ImportError:
     Couchbase = Connection = NotFoundError = None   # noqa
 
-from kombu.utils.url import _parse_url
-
-from celery.exceptions import ImproperlyConfigured
-from celery.utils.timeutils import maybe_timedelta
-
-from .base import KeyValueStoreBackend
-
-__all__ = ['CouchBaseBackend']
+__all__ = ('CouchbaseBackend',)
 
 
-class CouchBaseBackend(KeyValueStoreBackend):
-    """CouchBase backend.
+class CouchbaseBackend(KeyValueStoreBackend):
+    """Couchbase backend.
 
-    :raises celery.exceptions.ImproperlyConfigured: if
-        module :mod:`couchbase` is not available.
-
+    Raises:
+        celery.exceptions.ImproperlyConfigured:
+            if module :pypi:`couchbase` is not available.
     """
+
     bucket = 'default'
     host = 'localhost'
     port = 8091
     username = None
     password = None
     quiet = False
-    conncache = None
-    unlock_gil = True
     timeout = 2.5
-    transcoder = None
+
+    # Use str as couchbase key not bytes
+    key_t = str_t
 
     def __init__(self, url=None, *args, **kwargs):
-        super(CouchBaseBackend, self).__init__(*args, **kwargs)
+        super(CouchbaseBackend, self).__init__(*args, **kwargs)
         self.url = url
-
-        self.expires = kwargs.get('expires') or maybe_timedelta(
-            self.app.conf.CELERY_TASK_RESULT_EXPIRES)
 
         if Couchbase is None:
             raise ImproperlyConfigured(
                 'You need to install the couchbase library to use the '
-                'CouchBase backend.',
+                'Couchbase backend.',
             )
 
         uhost = uport = uname = upass = ubucket = None
@@ -63,7 +59,7 @@ class CouchBaseBackend(KeyValueStoreBackend):
             _, uhost, uport, uname, upass, ubucket, _ = _parse_url(url)
             ubucket = ubucket.strip('/') if ubucket else None
 
-        config = self.app.conf.get('CELERY_COUCHBASE_BACKEND_SETTINGS', None)
+        config = self.app.conf.get('couchbase_backend_settings', None)
         if config is not None:
             if not isinstance(config, dict):
                 raise ImproperlyConfigured(

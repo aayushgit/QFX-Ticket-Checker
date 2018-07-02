@@ -1,18 +1,17 @@
 # -*- coding: utf-8 -*-
-"""
-    celery.concurrency.eventlet
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-    Eventlet pool implementation.
-
-"""
-from __future__ import absolute_import
+"""Eventlet execution pool."""
+from __future__ import absolute_import, unicode_literals
 
 import sys
 
-from time import time
+from kombu.asynchronous import timer as _timer  # noqa
+from kombu.five import monotonic
 
-__all__ = ['TaskPool']
+from celery import signals  # noqa
+
+from . import base  # noqa
+
+__all__ = ('TaskPool',)
 
 W_RACE = """\
 Celery module with %s imported before eventlet patched\
@@ -29,31 +28,26 @@ for mod in (mod for mod in sys.modules if mod.startswith(RACE_MODS)):
             warnings.warn(RuntimeWarning(W_RACE % side))
 
 
-from celery import signals  # noqa
-from celery.utils import timer2  # noqa
-
-from . import base  # noqa
-
-
 def apply_target(target, args=(), kwargs={}, callback=None,
                  accept_callback=None, getpid=None):
     return base.apply_target(target, args, kwargs, callback, accept_callback,
                              pid=getpid())
 
 
-class Schedule(timer2.Schedule):
+class Timer(_timer.Timer):
+    """Eventlet Timer."""
 
     def __init__(self, *args, **kwargs):
         from eventlet.greenthread import spawn_after
         from greenlet import GreenletExit
-        super(Schedule, self).__init__(*args, **kwargs)
+        super(Timer, self).__init__(*args, **kwargs)
 
         self.GreenletExit = GreenletExit
         self._spawn_after = spawn_after
         self._queue = set()
 
-    def _enter(self, eta, priority, entry):
-        secs = max(eta - time(), 0)
+    def _enter(self, eta, priority, entry, **kwargs):
+        secs = max(eta - monotonic(), 0)
         g = self._spawn_after(secs, entry)
         self._queue.add(g)
         g.link(self._entry_exit, entry)
@@ -81,36 +75,27 @@ class Schedule(timer2.Schedule):
             except (KeyError, self.GreenletExit):
                 pass
 
+    def cancel(self, tref):
+        try:
+            tref.cancel()
+        except self.GreenletExit:
+            pass
+
     @property
     def queue(self):
         return self._queue
 
 
-class Timer(timer2.Timer):
-    Schedule = Schedule
-
-    def ensure_started(self):
-        pass
-
-    def stop(self):
-        self.schedule.clear()
-
-    def cancel(self, tref):
-        try:
-            tref.cancel()
-        except self.schedule.GreenletExit:
-            pass
-
-    def start(self):
-        pass
-
-
 class TaskPool(base.BasePool):
+    """Eventlet Task Pool."""
+
     Timer = Timer
 
     signal_safe = False
     is_green = True
     task_join_will_block = False
+    _pool = None
+    _quick_put = None
 
     def __init__(self, *args, **kwargs):
         from eventlet import greenthread
@@ -154,8 +139,10 @@ class TaskPool(base.BasePool):
         self.limit = limit
 
     def _get_info(self):
-        return {
+        info = super(TaskPool, self)._get_info()
+        info.update({
             'max-concurrency': self.limit,
             'free-threads': self._pool.free(),
             'running-threads': self._pool.running(),
-        }
+        })
+        return info

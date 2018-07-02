@@ -1,36 +1,35 @@
 # -*- coding: utf-8 -*-
-"""
-    celery.events.snapshot
-    ~~~~~~~~~~~~~~~~~~~~~~
+"""Periodically store events in a database.
 
-    Consuming the events as a stream is not always suitable
-    so this module implements a system to take snapshots of the
-    state of a cluster at regular intervals.  There is a full
-    implementation of this writing the snapshots to a database
-    in :mod:`djcelery.snapshots` in the `django-celery` distribution.
-
+Consuming the events as a stream isn't always suitable
+so this module implements a system to take snapshots of the
+state of a cluster at regular intervals.  There's a full
+implementation of this writing the snapshots to a database
+in :mod:`djcelery.snapshots` in the `django-celery` distribution.
 """
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 from kombu.utils.limits import TokenBucket
 
 from celery import platforms
 from celery.app import app_or_default
-from celery.utils.timer2 import Timer
 from celery.utils.dispatch import Signal
 from celery.utils.imports import instantiate
 from celery.utils.log import get_logger
-from celery.utils.timeutils import rate
+from celery.utils.time import rate
+from celery.utils.timer2 import Timer
 
-__all__ = ['Polaroid', 'evcam']
+__all__ = ('Polaroid', 'evcam')
 
 logger = get_logger('celery.evcam')
 
 
 class Polaroid(object):
+    """Record event snapshots."""
+
     timer = None
-    shutter_signal = Signal(providing_args=('state', ))
-    cleanup_signal = Signal()
+    shutter_signal = Signal(name='shutter_signal', providing_args={'state'})
+    cleanup_signal = Signal(name='cleanup_signal')
     clear_after = False
 
     _tref = None
@@ -60,13 +59,13 @@ class Polaroid(object):
 
     def cleanup(self):
         logger.debug('Cleanup: Running...')
-        self.cleanup_signal.send(None)
+        self.cleanup_signal.send(sender=self.state)
         self.on_cleanup()
 
     def shutter(self):
         if self.maxrate is None or self.maxrate.can_consume():
             logger.debug('Shutter: %s', self.state)
-            self.shutter_signal.send(self.state)
+            self.shutter_signal.send(sender=self.state)
             self.on_shutter(self.state)
 
     def capture(self):
@@ -89,6 +88,7 @@ class Polaroid(object):
 
 def evcam(camera, freq=1.0, maxrate=None, loglevel=0,
           logfile=None, pidfile=None, timer=None, app=None):
+    """Start snapshot recorder."""
     app = app_or_default(app)
 
     if pidfile:
@@ -102,7 +102,7 @@ def evcam(camera, freq=1.0, maxrate=None, loglevel=0,
     cam = instantiate(camera, state, app=app, freq=freq,
                       maxrate=maxrate, timer=timer)
     cam.install()
-    conn = app.connection()
+    conn = app.connection_for_read()
     recv = app.events.Receiver(conn, handlers={'*': state.event})
     try:
         try:

@@ -1,18 +1,15 @@
-"""
-kombu.transport.memory
-======================
-
-In-memory transport.
-
-"""
-from __future__ import absolute_import
+"""In-memory transport."""
+from __future__ import absolute_import, unicode_literals
 
 from kombu.five import Queue, values
 
+from . import base
 from . import virtual
 
 
 class Channel(virtual.Channel):
+    """In-memory Channel."""
+
     queues = {}
     do_restore = False
     supports_fanout = True
@@ -45,7 +42,7 @@ class Channel(virtual.Channel):
     def _size(self, queue):
         return self._queue_for(queue).qsize()
 
-    def _delete(self, queue, *args):
+    def _delete(self, queue, *args, **kwargs):
         self.queues.pop(queue, None)
 
     def _purge(self, queue):
@@ -65,10 +62,14 @@ class Channel(virtual.Channel):
 
 
 class Transport(virtual.Transport):
+    """In-memory Transport."""
+
     Channel = Channel
 
     #: memory backend state is global.
     state = virtual.BrokerState()
+
+    implements = base.Transport.implements
 
     driver_type = 'memory'
     driver_name = 'memory'

@@ -1,29 +1,25 @@
 # -*- coding: utf-8 -*-
-"""
-The :program:`celery amqp` command.
+"""The :program:`celery amqp` command.
 
 .. program:: celery amqp
-
 """
 from __future__ import absolute_import, print_function, unicode_literals
 
-import cmd
-import sys
-import shlex
+import cmd as _cmd
 import pprint
-
+import shlex
+import sys
 from functools import partial
 from itertools import count
 
 from kombu.utils.encoding import safe_str
 
-from celery.utils.functional import padlist
-
 from celery.bin.base import Command
 from celery.five import string_t
-from celery.utils import strtobool
+from celery.utils.functional import padlist
+from celery.utils.serialization import strtobool
 
-__all__ = ['AMQPAdmin', 'AMQShell', 'Spec', 'amqp']
+__all__ = ('AMQPAdmin', 'AMQShell', 'Spec', 'amqp')
 
 # Map to coerce strings to other types.
 COERCE = {bool: strtobool}
@@ -45,22 +41,21 @@ class Spec(object):
     """AMQP Command specification.
 
     Used to convert arguments to Python values and display various help
-    and tooltips.
+    and tool-tips.
 
-    :param args: see :attr:`args`.
-    :keyword returns: see :attr:`returns`.
-
-    .. attribute args::
-
-        List of arguments this command takes. Should
-        contain `(argument_name, argument_type)` tuples.
-
-    .. attribute returns:
-
-        Helpful human string representation of what this command returns.
-        May be :const:`None`, to signify the return type is unknown.
-
+    Arguments:
+        args (Sequence): see :attr:`args`.
+        returns (str): see :attr:`returns`.
     """
+
+    #: List of arguments this command takes.
+    #: Should contain ``(argument_name, argument_type)`` tuples.
+    args = None
+
+    #: Helpful human string representation of what this command returns.
+    #: May be :const:`None`, to signify the return type is unknown.
+    returns = None
+
     def __init__(self, *args, **kwargs):
         self.args = args
         self.returns = kwargs.get('returns')
@@ -76,12 +71,10 @@ class Spec(object):
     def str_args_to_python(self, arglist):
         """Process list of string arguments to values according to spec.
 
-        e.g:
-
+        Example:
             >>> spec = Spec([('queue', str), ('if_unused', bool)])
             >>> spec.str_args_to_python('pobox', 'true')
             ('pobox', True)
-
         """
         return tuple(
             self.coerce(index, value) for index, value in enumerate(arglist))
@@ -116,37 +109,32 @@ def format_declare_queue(ret):
     return 'ok. queue:{0} messages:{1} consumers:{2}.'.format(*ret)
 
 
-class AMQShell(cmd.Cmd):
+class AMQShell(_cmd.Cmd):
     """AMQP API Shell.
 
-    :keyword connect: Function used to connect to the server, must return
-        connection object.
-
-    :keyword silent: If :const:`True`, the commands won't have annoying
-                     output not relevant when running in non-shell mode.
-
-
-    .. attribute: builtins
-
-        Mapping of built-in command names -> method names
-
-    .. attribute:: amqp
-
-        Mapping of AMQP API commands and their :class:`Spec`.
-
+    Arguments:
+        connect (Callable): Function used to connect to the server.
+            Must return :class:`kombu.Connection` object.
+        silent (bool): If enabled, the commands won't have annoying
+            output not relevant when running in non-shell mode.
     """
+
     conn = None
     chan = None
     prompt_fmt = '{self.counter}> '
-    identchars = cmd.IDENTCHARS = '.'
+    identchars = _cmd.IDENTCHARS = '.'
     needs_reconnect = False
     counter = 1
     inc_counter = count(2)
 
-    builtins = {'EOF': 'do_exit',
-                'exit': 'do_exit',
-                'help': 'do_help'}
+    #: Map of built-in command names -> method names
+    builtins = {
+        'EOF': 'do_exit',
+        'exit': 'do_exit',
+        'help': 'do_help',
+    }
 
+    #: Map of AMQP API commands and their :class:`Spec`.
     amqp = {
         'exchange.declare': Spec(('exchange', str),
                                  ('type', str),
@@ -196,11 +184,11 @@ class AMQShell(cmd.Cmd):
         self.connect = kwargs.pop('connect')
         self.silent = kwargs.pop('silent', False)
         self.out = kwargs.pop('out', sys.stderr)
-        cmd.Cmd.__init__(self, *args, **kwargs)
+        _cmd.Cmd.__init__(self, *args, **kwargs)
         self._reconnect()
 
     def note(self, m):
-        """Say something to the user. Disabled if :attr:`silent`."""
+        """Say something to the user.  Disabled if :attr:`silent`."""
         if not self.silent:
             say(m, file=self.out)
 
@@ -208,12 +196,14 @@ class AMQShell(cmd.Cmd):
         say(m, file=self.out)
 
     def get_amqp_api_command(self, cmd, arglist):
-        """With a command name and a list of arguments, convert the arguments
+        """Get AMQP command wrapper.
+
+        With a command name and a list of arguments, convert the arguments
         to Python values and find the corresponding method on the AMQP channel
         object.
 
-        :returns: tuple of `(method, processed_args)`.
-
+        Returns:
+            Tuple: of `(method, processed_args)` pairs.
         """
         spec = self.amqp[cmd]
         args = spec.str_args_to_python(arglist)
@@ -256,32 +246,33 @@ class AMQShell(cmd.Cmd):
         return [cmd for cmd in names
                 if cmd.partition('.')[2].startswith(text)]
 
-    def dispatch(self, cmd, argline):
+    def dispatch(self, cmd, arglist):
         """Dispatch and execute the command.
 
-        Lookup order is: :attr:`builtins` -> :attr:`amqp`.
-
+        Look-up order is: :attr:`builtins` -> :attr:`amqp`.
         """
-        arglist = shlex.split(safe_str(argline))
+        if isinstance(arglist, string_t):
+            arglist = shlex.split(safe_str(arglist))
         if cmd in self.builtins:
             return getattr(self, self.builtins[cmd])(*arglist)
         fun, args, formatter = self.get_amqp_api_command(cmd, arglist)
         return formatter(fun(*args))
 
-    def parseline(self, line):
+    def parseline(self, parts):
         """Parse input line.
 
-        :returns: tuple of three items:
-            `(command_name, arglist, original_line)`
-
+        Returns:
+            Tuple: of three items:
+                `(command_name, arglist, original_line)`
         """
-        parts = line.split()
         if parts:
-            return parts[0], ' '.join(parts[1:]), line
-        return '', '', line
+            return parts[0], parts[1:], ' '.join(parts)
+        return '', '', ''
 
     def onecmd(self, line):
         """Parse line and execute command."""
+        if isinstance(line, string_t):
+            line = shlex.split(safe_str(line))
         cmd, arg, line = self.parseline(line)
         if not line:
             return self.emptyline()
@@ -291,7 +282,7 @@ class AMQShell(cmd.Cmd):
             self.respond(self.dispatch(cmd, arg))
         except (AttributeError, KeyError) as exc:
             self.default(line)
-        except Exception as exc:
+        except Exception as exc:  # pylint: disable=broad-except
             self.say(exc)
             self.needs_reconnect = True
 
@@ -317,6 +308,7 @@ class AMQShell(cmd.Cmd):
 
 class AMQPAdmin(object):
     """The celery :program:`celery amqp` utility."""
+
     Shell = AMQShell
 
     def __init__(self, *args, **kwargs):
@@ -337,12 +329,11 @@ class AMQPAdmin(object):
     def run(self):
         shell = self.Shell(connect=self.connect, out=self.out)
         if self.args:
-            return shell.onecmd(' '.join(self.args))
+            return shell.onecmd(self.args)
         try:
             return shell.cmdloop()
         except KeyboardInterrupt:
             self.note('(bibi)')
-            pass
 
     def note(self, m):
         if not self.silent:
@@ -352,20 +343,20 @@ class AMQPAdmin(object):
 class amqp(Command):
     """AMQP Administration Shell.
 
-    Also works for non-amqp transports (but not ones that
+    Also works for non-AMQP transports (but not ones that
     store declarations in memory).
 
-    Examples::
+    Examples:
+        .. code-block:: console
 
-        celery amqp
-            start shell mode
-        celery amqp help
-            show list of commands
+            $ # start shell mode
+            $ celery amqp
+            $ # show list of commands
+            $ celery amqp help
 
-        celery amqp exchange.delete name
-        celery amqp queue.delete queue
-        celery amqp queue.delete queue yes yes
-
+            $ celery amqp exchange.delete name
+            $ celery amqp queue.delete queue
+            $ celery amqp queue.delete queue yes yes
     """
 
     def run(self, *args, **options):
@@ -375,6 +366,7 @@ class amqp(Command):
 
 def main():
     amqp().execute_from_commandline()
+
 
 if __name__ == '__main__':  # pragma: no cover
     main()

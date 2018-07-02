@@ -1,11 +1,5 @@
-"""
-kombu.simple
-============
-
-Simple interface.
-
-"""
-from __future__ import absolute_import
+"""Simple messaging interface."""
+from __future__ import absolute_import, unicode_literals
 
 import socket
 
@@ -41,20 +35,36 @@ class SimpleBase(object):
     def get(self, block=True, timeout=None):
         if not block:
             return self.get_nowait()
+
         self._consume()
-        elapsed = 0.0
+
+        time_start = monotonic()
         remaining = timeout
         while True:
-            time_start = monotonic()
             if self.buffer:
                 return self.buffer.popleft()
+
+            if remaining is not None and remaining <= 0.0:
+                raise self.Empty()
+
             try:
-                self.channel.connection.client.drain_events(
-                    timeout=timeout and remaining)
+                # The `drain_events` method will
+                # block on the socket connection to rabbitmq. if any
+                # application-level messages are received, it will put them
+                # into `self.buffer`.
+                # * The method will block for UP TO `timeout` milliseconds.
+                # * The method may raise a socket.timeout exception; or...
+                # * The method may return without having put anything on
+                #    `self.buffer`.  This is because internal heartbeat
+                #    messages are sent over the same socket; also POSIX makes
+                #    no guarantees against socket calls returning early.
+                self.channel.connection.client.drain_events(timeout=remaining)
             except socket.timeout:
                 raise self.Empty()
-            elapsed += monotonic() - time_start
-            remaining = timeout and timeout - elapsed or None
+
+            if remaining is not None:
+                elapsed = monotonic() - time_start
+                remaining = timeout - elapsed
 
     def get_nowait(self):
         m = self.queue.get(no_ack=self.no_ack)
@@ -90,7 +100,7 @@ class SimpleBase(object):
             self._consuming = True
 
     def __len__(self):
-        """`len(self) -> self.qsize()`"""
+        """`len(self) -> self.qsize()`."""
         return self.qsize()
 
     def __bool__(self):
@@ -99,6 +109,8 @@ class SimpleBase(object):
 
 
 class SimpleQueue(SimpleBase):
+    """Simple API for persistent queues."""
+
     no_ack = False
     queue_opts = {}
     exchange_opts = {'type': 'direct'}
@@ -116,22 +128,23 @@ class SimpleQueue(SimpleBase):
             queue = entity.Queue(name, exchange, name, **queue_opts)
             routing_key = name
         else:
-            name = queue.name
             exchange = queue.exchange
             routing_key = queue.routing_key
+        consumer = messaging.Consumer(channel, queue)
         producer = messaging.Producer(channel, exchange,
                                       serializer=serializer,
                                       routing_key=routing_key,
                                       compression=compression)
-        consumer = messaging.Consumer(channel, queue)
         super(SimpleQueue, self).__init__(channel, producer,
                                           consumer, no_ack, **kwargs)
 
 
 class SimpleBuffer(SimpleQueue):
+    """Simple API for ephemeral queues."""
+
     no_ack = True
-    queue_opts = dict(durable=False,
-                      auto_delete=True)
-    exchange_opts = dict(durable=False,
-                         delivery_mode='transient',
-                         auto_delete=True)
+    queue_opts = {'durable': False,
+                  'auto_delete': True}
+    exchange_opts = {'durable': False,
+                     'delivery_mode': 'transient',
+                     'auto_delete': True}

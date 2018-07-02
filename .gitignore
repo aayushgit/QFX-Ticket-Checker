@@ -3,3 +3,4 @@ qfxscraper.py
 qfx.sh
 celerybeat-schedule
 celerybeat.pid
+requirements.txt

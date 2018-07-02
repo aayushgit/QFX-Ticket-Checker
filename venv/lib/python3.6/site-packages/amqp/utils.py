@@ -1,78 +1,26 @@
-from __future__ import absolute_import
+"""Compatibility utilities."""
+from __future__ import absolute_import, unicode_literals
 
-import sys
+import logging
+
+# enables celery 3.1.23 to start again
+from vine import promise  # noqa
+from vine.utils import wraps
+
+from .five import PY3, string_t, text_t
 
 try:
     import fcntl
-except ImportError:
+except ImportError:  # pragma: no cover
     fcntl = None   # noqa
-
-
-class promise(object):
-    if not hasattr(sys, 'pypy_version_info'):
-        __slots__ = tuple(
-            'fun args kwargs value ready failed '
-            ' on_success on_error calls'.split()
-        )
-
-    def __init__(self, fun, args=(), kwargs=(),
-                 on_success=None, on_error=None):
-        self.fun = fun
-        self.args = args
-        self.kwargs = kwargs
-        self.ready = False
-        self.failed = False
-        self.on_success = on_success
-        self.on_error = on_error
-        self.value = None
-        self.calls = 0
-
-    def __repr__(self):
-        return '<$: {0.fun.__name__}(*{0.args!r}, **{0.kwargs!r})'.format(
-            self,
-        )
-
-    def __call__(self, *args, **kwargs):
-        try:
-            self.value = self.fun(
-                *self.args + args if self.args else args,
-                **dict(self.kwargs, **kwargs) if self.kwargs else kwargs
-            )
-        except Exception as exc:
-            self.set_error_state(exc)
-        else:
-            if self.on_success:
-                self.on_success(self.value)
-        finally:
-            self.ready = True
-            self.calls += 1
-
-    def then(self, callback=None, on_error=None):
-        self.on_success = callback
-        self.on_error = on_error
-        return callback
-
-    def set_error_state(self, exc):
-        self.failed = True
-        if self.on_error is None:
-            raise
-        self.on_error(exc)
-
-    def throw(self, exc):
-        try:
-            raise exc
-        except exc.__class__ as with_cause:
-            self.set_error_state(with_cause)
-
-
-def noop():
-    return promise(lambda *a, **k: None)
-
 
 try:
     from os import set_cloexec  # Python 3.4?
-except ImportError:
+except ImportError:  # pragma: no cover
     def set_cloexec(fd, cloexec):  # noqa
+        """Set flag to close fd after exec."""
+        if fcntl is None:
+            return
         try:
             FD_CLOEXEC = fcntl.FD_CLOEXEC
         except AttributeError:
@@ -88,8 +36,12 @@ except ImportError:
 
 
 def get_errno(exc):
-    """:exc:`socket.error` and :exc:`IOError` first got
-    the ``.errno`` attribute in Py2.7"""
+    """Get exception errno (if set).
+
+    Notes:
+        :exc:`socket.error` and :exc:`IOError` first got
+        the ``.errno`` attribute in Py2.7.
+    """
     try:
         return exc.errno
     except AttributeError:
@@ -100,3 +52,56 @@ def get_errno(exc):
         except AttributeError:
             pass
     return 0
+
+
+def coro(gen):
+    """Decorator to mark generator as a co-routine."""
+    @wraps(gen)
+    def _boot(*args, **kwargs):
+        co = gen(*args, **kwargs)
+        next(co)
+        return co
+
+    return _boot
+
+
+if PY3:  # pragma: no cover
+
+    def str_to_bytes(s):
+        """Convert str to bytes."""
+        if isinstance(s, str):
+            return s.encode('utf-8', 'surrogatepass')
+        return s
+
+    def bytes_to_str(s):
+        """Convert bytes to str."""
+        if isinstance(s, bytes):
+            return s.decode('utf-8', 'surrogatepass')
+        return s
+else:
+
+    def str_to_bytes(s):                # noqa
+        """Convert str to bytes."""
+        if isinstance(s, text_t):
+            return s.encode('utf-8')
+        return s
+
+    def bytes_to_str(s):                # noqa
+        """Convert bytes to str."""
+        return s
+
+
+class NullHandler(logging.Handler):
+    """A logging handler that does nothing."""
+
+    def emit(self, record):
+        pass
+
+
+def get_logger(logger):
+    """Get logger by name."""
+    if isinstance(logger, string_t):
+        logger = logging.getLogger(logger)
+    if not logger.handlers:
+        logger.addHandler(NullHandler())
+    return logger

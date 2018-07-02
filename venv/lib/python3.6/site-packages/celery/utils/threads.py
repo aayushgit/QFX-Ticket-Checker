@@ -1,33 +1,43 @@
 # -*- coding: utf-8 -*-
-"""
-    celery.utils.threads
-    ~~~~~~~~~~~~~~~~~~~~
-
-    Threading utilities.
-
-"""
-from __future__ import absolute_import, print_function
+"""Threading primitives and utilities."""
+from __future__ import absolute_import, print_function, unicode_literals
 
 import os
 import socket
 import sys
 import threading
 import traceback
-
 from contextlib import contextmanager
 
+from celery.five import THREAD_TIMEOUT_MAX, items, python_2_unicode_compatible
 from celery.local import Proxy
-from celery.five import THREAD_TIMEOUT_MAX, items
 
-__all__ = ['bgThread', 'Local', 'LocalStack', 'LocalManager',
-           'get_ident', 'default_socket_timeout']
+try:
+    from greenlet import getcurrent as get_ident
+except ImportError:  # pragma: no cover
+    try:
+        from _thread import get_ident                   # noqa
+    except ImportError:
+        try:
+            from thread import get_ident                # noqa
+        except ImportError:  # pragma: no cover
+            try:
+                from _dummy_thread import get_ident     # noqa
+            except ImportError:
+                from dummy_thread import get_ident      # noqa
+
+
+__all__ = (
+    'bgThread', 'Local', 'LocalStack', 'LocalManager',
+    'get_ident', 'default_socket_timeout',
+)
 
 USE_FAST_LOCALS = os.environ.get('USE_FAST_LOCALS')
-PY3 = sys.version_info[0] == 3
 
 
 @contextmanager
 def default_socket_timeout(timeout):
+    """Context temporarily setting the default socket timeout."""
     prev = socket.getdefaulttimeout()
     socket.setdefaulttimeout(timeout)
     yield
@@ -35,6 +45,7 @@ def default_socket_timeout(timeout):
 
 
 class bgThread(threading.Thread):
+    """Background service thread."""
 
     def __init__(self, name=None, **kwargs):
         super(bgThread, self).__init__()
@@ -44,16 +55,11 @@ class bgThread(threading.Thread):
         self.name = name or self.__class__.__name__
 
     def body(self):
-        raise NotImplementedError('subclass responsibility')
+        raise NotImplementedError()
 
     def on_crash(self, msg, *fmt, **kwargs):
         print(msg.format(*fmt), file=sys.stderr)
-        exc_info = sys.exc_info()
-        try:
-            traceback.print_exception(exc_info[0], exc_info[1], exc_info[2],
-                                      None, sys.stderr)
-        finally:
-            del(exc_info)
+        traceback.print_exc(None, sys.stderr)
 
     def run(self):
         body = self.body
@@ -62,11 +68,12 @@ class bgThread(threading.Thread):
             while not shutdown_set():
                 try:
                     body()
-                except Exception as exc:
+                except Exception as exc:  # pylint: disable=broad-except
                     try:
                         self.on_crash('{0!r} crashed: {1!r}', self.name, exc)
                         self._set_stopped()
                     finally:
+                        sys.stderr.flush()
                         os._exit(1)  # exiting by normal means won't work
         finally:
             self._set_stopped()
@@ -86,45 +93,31 @@ class bgThread(threading.Thread):
         if self.is_alive():
             self.join(THREAD_TIMEOUT_MAX)
 
-try:
-    from greenlet import getcurrent as get_ident
-except ImportError:  # pragma: no cover
-    try:
-        from _thread import get_ident                   # noqa
-    except ImportError:
-        try:
-            from thread import get_ident                # noqa
-        except ImportError:  # pragma: no cover
-            try:
-                from _dummy_thread import get_ident     # noqa
-            except ImportError:
-                from dummy_thread import get_ident      # noqa
-
 
 def release_local(local):
-    """Releases the contents of the local for the current context.
+    """Release the contents of the local for the current context.
+
     This makes it possible to use locals without a manager.
 
-    Example::
+    With this function one can release :class:`Local` objects as well as
+    :class:`StackLocal` objects.  However it's not possible to
+    release data held by proxies that way, one always has to retain
+    a reference to the underlying local object in order to be able
+    to release it.
 
+    Example:
         >>> loc = Local()
         >>> loc.foo = 42
         >>> release_local(loc)
         >>> hasattr(loc, 'foo')
         False
-
-    With this function one can release :class:`Local` objects as well
-    as :class:`StackLocal` objects.  However it is not possible to
-    release data held by proxies that way, one always has to retain
-    a reference to the underlying local object in order to be able
-    to release it.
-
-    .. versionadded:: 0.6.1
     """
     local.__release_local__()
 
 
 class Local(object):
+    """Local object."""
+
     __slots__ = ('__storage__', '__ident_func__')
 
     def __init__(self):
@@ -163,7 +156,9 @@ class Local(object):
 
 
 class _LocalStack(object):
-    """This class works similar to a :class:`Local` but keeps a stack
+    """Local stack.
+
+    This class works similar to a :class:`Local` but keeps a stack
     of objects instead.  This is best explained with an example::
 
         >>> ls = LocalStack()
@@ -185,7 +180,6 @@ class _LocalStack(object):
 
     By calling the stack without arguments it will return a proxy that
     resolves to the topmost item on the stack.
-
     """
 
     def __init__(self):
@@ -211,16 +205,20 @@ class _LocalStack(object):
         return Proxy(_lookup)
 
     def push(self, obj):
-        """Pushes a new item to the stack"""
+        """Push a new item to the stack."""
         rv = getattr(self._local, 'stack', None)
         if rv is None:
+            # pylint: disable=assigning-non-slot
+            # This attribute is defined now.
             self._local.stack = rv = []
         rv.append(obj)
         return rv
 
     def pop(self):
-        """Remove the topmost item from the stack, will return the
-        old value or `None` if the stack was already empty.
+        """Remove the topmost item from the stack.
+
+        Note:
+            Will return the old value or `None` if the stack was already empty.
         """
         stack = getattr(self._local, 'stack', None)
         if stack is None:
@@ -237,8 +235,8 @@ class _LocalStack(object):
 
     @property
     def stack(self):
-        """get_current_worker_task uses this to find
-        the original task that was executed by the worker."""
+        # get_current_worker_task uses this to find
+        # the original task that was executed by the worker.
         stack = getattr(self._local, 'stack', None)
         if stack is not None:
             return stack
@@ -246,8 +244,10 @@ class _LocalStack(object):
 
     @property
     def top(self):
-        """The topmost item on the stack.  If the stack is empty,
-        `None` is returned.
+        """The topmost item on the stack.
+
+        Note:
+            If the stack is empty, :const:`None` is returned.
         """
         try:
             return self._local.stack[-1]
@@ -255,16 +255,18 @@ class _LocalStack(object):
             return None
 
 
+@python_2_unicode_compatible
 class LocalManager(object):
-    """Local objects cannot manage themselves. For that you need a local
-    manager.  You can pass a local manager multiple locals or add them
-    later by appending them to `manager.locals`.  Everytime the manager
-    cleans up it, will clean up all the data left in the locals for this
+    """Local objects cannot manage themselves.
+
+    For that you need a local manager.
+    You can pass a local manager multiple locals or add them
+    later by appending them to ``manager.locals``.  Every time the manager
+    cleans up, it will clean up all the data left in the locals for this
     context.
 
-    The `ident_func` parameter can be added to override the default ident
+    The ``ident_func`` parameter can be added to override the default ident
     function for the wrapped locals.
-
     """
 
     def __init__(self, locals=None, ident_func=None):
@@ -282,17 +284,19 @@ class LocalManager(object):
             self.ident_func = get_ident
 
     def get_ident(self):
-        """Return the context identifier the local objects use internally
+        """Return context identifier.
+
+        This is the indentifer the local objects use internally
         for this context.  You cannot override this method to change the
         behavior but use it to link other context local objects (such as
-        SQLAlchemy's scoped sessions) to the Werkzeug locals."""
+        SQLAlchemy's scoped sessions) to the Werkzeug locals.
+        """
         return self.ident_func()
 
     def cleanup(self):
         """Manually clean up the data in the locals for this context.
 
-        Call this at the end of the request or use `make_middleware()`.
-
+        Call this at the end of the request or use ``make_middleware()``.
         """
         for local in self.locals:
             release_local(local)
@@ -308,6 +312,7 @@ class _FastLocalStack(threading.local):
         self.stack = []
         self.push = self.stack.append
         self.pop = self.stack.pop
+        super(_FastLocalStack, self).__init__()
 
     @property
     def top(self):
@@ -319,11 +324,12 @@ class _FastLocalStack(threading.local):
     def __len__(self):
         return len(self.stack)
 
+
 if USE_FAST_LOCALS:  # pragma: no cover
     LocalStack = _FastLocalStack
-else:
+else:  # pragma: no cover
     # - See #706
     # since each thread has its own greenlet we can just use those as
-    # identifiers for the context.  If greenlets are not available we
+    # identifiers for the context.  If greenlets aren't available we
     # fall back to the  current thread ident.
     LocalStack = _LocalStack  # noqa

@@ -1,17 +1,11 @@
-"""
-kombu.utils.debug
-=================
-
-Debugging support.
-
-"""
-from __future__ import absolute_import
+"""Debugging support."""
+from __future__ import absolute_import, unicode_literals
 
 import logging
 
-from functools import wraps
+from vine.utils import wraps
 
-from kombu.five import items
+from kombu.five import items, python_2_unicode_compatible
 from kombu.log import get_logger
 
 __all__ = ['setup_logging', 'Logwrapped']
@@ -19,13 +13,17 @@ __all__ = ['setup_logging', 'Logwrapped']
 
 def setup_logging(loglevel=logging.DEBUG, loggers=['kombu.connection',
                                                    'kombu.channel']):
-    for logger in loggers:
-        l = get_logger(logger)
-        l.addHandler(logging.StreamHandler())
-        l.setLevel(loglevel)
+    """Setup logging to stdout."""
+    for logger_name in loggers:
+        logger = get_logger(logger_name)
+        logger.addHandler(logging.StreamHandler())
+        logger.setLevel(loglevel)
 
 
+@python_2_unicode_compatible
 class Logwrapped(object):
+    """Wrap all object methods, to log on call."""
+
     __ignore = ('__enter__', '__exit__')
 
     def __init__(self, instance, logger=None, ident=None):

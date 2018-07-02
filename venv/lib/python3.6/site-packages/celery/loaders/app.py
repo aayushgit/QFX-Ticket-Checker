@@ -1,17 +1,11 @@
 # -*- coding: utf-8 -*-
-"""
-    celery.loaders.app
-    ~~~~~~~~~~~~~~~~~~
-
-    The default loader used with custom app instances.
-
-"""
-from __future__ import absolute_import
+"""The default loader used with custom app instances."""
+from __future__ import absolute_import, unicode_literals
 
 from .base import BaseLoader
 
-__all__ = ['AppLoader']
+__all__ = ('AppLoader',)
 
 
 class AppLoader(BaseLoader):
-    pass
+    """Default loader used when an app is specified."""

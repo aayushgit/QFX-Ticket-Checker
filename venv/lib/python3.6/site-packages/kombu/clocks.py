@@ -1,34 +1,30 @@
-"""
-kombu.clocks
-============
-
-Logical Clocks and Synchronization.
-
-"""
-from __future__ import absolute_import
+"""Logical Clocks and Synchronization."""
+from __future__ import absolute_import, unicode_literals
 
 from threading import Lock
 from itertools import islice
 from operator import itemgetter
 
-from .five import zip
+from .five import python_2_unicode_compatible, zip
 
 __all__ = ['LamportClock', 'timetuple']
 
 R_CLOCK = '_lamport(clock={0}, timestamp={1}, id={2} {3!r})'
 
 
+@python_2_unicode_compatible
 class timetuple(tuple):
     """Tuple of event clock information.
 
     Can be used as part of a heap to keep events ordered.
 
-    :param clock:  Event clock value.
-    :param timestamp: Event UNIX timestamp value.
-    :param id: Event host id (e.g. ``hostname:pid``).
-    :param obj: Optional obj to associate with this event.
-
+    Arguments:
+        clock (int):  Event clock value.
+        timestamp (float): Event UNIX timestamp value.
+        id (str): Event host id (e.g. ``hostname:pid``).
+        obj (Any): Optional obj to associate with this event.
     """
+
     __slots__ = ()
 
     def __new__(cls, clock, timestamp, id, obj=None):
@@ -68,6 +64,7 @@ class timetuple(tuple):
     obj = property(itemgetter(3))
 
 
+@python_2_unicode_compatible
 class LamportClock(object):
     """Lamport's logical clock.
 
@@ -88,14 +85,13 @@ class LamportClock(object):
     process receives a message, it resynchronizes its logical clock with
     the sender.
 
-    .. seealso::
-
+    See Also:
         * `Lamport timestamps`_
 
         * `Lamports distributed mutex`_
 
-    .. _`Lamport Timestamps`: http://en.wikipedia.org/wiki/Lamport_timestamps
-    .. _`Lamports distributed mutex`: http://bit.ly/p99ybE
+    .. _`Lamport Timestamps`: https://en.wikipedia.org/wiki/Lamport_timestamps
+    .. _`Lamports distributed mutex`: https://bit.ly/p99ybE
 
     *Usage*
 
@@ -104,6 +100,7 @@ class LamportClock(object):
     the time stamp of the incoming message.
 
     """
+
     #: The clocks current value.
     value = 0
 
@@ -122,7 +119,9 @@ class LamportClock(object):
             return self.value
 
     def sort_heap(self, h):
-        """List of tuples containing at least two elements, representing
+        """Sort heap of events.
+
+        List of tuples containing at least two elements, representing
         an event, where the first element is the event's scalar clock value,
         and the second element is the id of the process (usually
         ``"hostname:pid"``): ``sh([(clock, processid, ...?), (...)])``
@@ -134,7 +133,6 @@ class LamportClock(object):
         present.
 
         Will return the latest event.
-
         """
         if h[0][0] == h[1][0]:
             same = []

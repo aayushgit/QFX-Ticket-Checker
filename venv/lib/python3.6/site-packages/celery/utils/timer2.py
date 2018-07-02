@@ -1,34 +1,42 @@
 # -*- coding: utf-8 -*-
-"""
-    timer2
-    ~~~~~~
+"""Scheduler for Python functions.
 
-    Scheduler for Python functions.
-
+.. note::
+    This is used for the thread-based worker only,
+    not for amqp/redis/sqs/qpid where :mod:`kombu.asynchronous.timer` is used.
 """
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 import os
 import sys
 import threading
-
 from itertools import count
 from time import sleep
 
+from kombu.asynchronous.timer import Entry
+from kombu.asynchronous.timer import Timer as Schedule
+from kombu.asynchronous.timer import logger, to_timestamp
+
 from celery.five import THREAD_TIMEOUT_MAX
-from kombu.async.timer import Entry, Timer as Schedule, to_timestamp, logger
 
 TIMER_DEBUG = os.environ.get('TIMER_DEBUG')
 
-__all__ = ['Entry', 'Schedule', 'Timer', 'to_timestamp']
+__all__ = ('Entry', 'Schedule', 'Timer', 'to_timestamp')
 
 
 class Timer(threading.Thread):
+    """Timer thread.
+
+    Note:
+        This is only used for transports not supporting AsyncIO.
+    """
+
     Entry = Entry
     Schedule = Schedule
 
     running = False
     on_tick = None
+
     _timer_count = count(1)
 
     if TIMER_DEBUG:  # pragma: no cover
@@ -83,6 +91,7 @@ class Timer(threading.Thread):
                 pass
         except Exception as exc:
             logger.error('Thread Timer crashed: %r', exc, exc_info=True)
+            sys.stderr.flush()
             os._exit(1)
 
     def stop(self):
@@ -136,6 +145,7 @@ class Timer(threading.Thread):
         return len(self.schedule)
 
     def __bool__(self):
+        """``bool(timer)``."""
         return True
     __nonzero__ = __bool__
 

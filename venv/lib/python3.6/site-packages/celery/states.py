@@ -1,9 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
-celery.states
-=============
-
-Built-in task states.
+"""Built-in task states.
 
 .. _states:
 
@@ -29,7 +25,7 @@ Set of states meaning the task result is ready (has been executed).
 UNREADY_STATES
 ~~~~~~~~~~~~~~
 
-Set of states meaning the task result is not ready (has not been executed).
+Set of states meaning the task result is not ready (hasn't been executed).
 
 .. state:: EXCEPTION_STATES
 
@@ -52,28 +48,32 @@ ALL_STATES
 
 Set of all possible states.
 
-
-Misc.
------
+Misc
+----
 
 """
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals
 
-__all__ = ['PENDING', 'RECEIVED', 'STARTED', 'SUCCESS', 'FAILURE',
-           'REVOKED', 'RETRY', 'IGNORED', 'READY_STATES', 'UNREADY_STATES',
-           'EXCEPTION_STATES', 'PROPAGATE_STATES', 'precedence', 'state']
+__all__ = (
+    'PENDING', 'RECEIVED', 'STARTED', 'SUCCESS', 'FAILURE',
+    'REVOKED', 'RETRY', 'IGNORED', 'READY_STATES', 'UNREADY_STATES',
+    'EXCEPTION_STATES', 'PROPAGATE_STATES', 'precedence', 'state',
+)
 
 #: State precedence.
 #: None represents the precedence of an unknown state.
 #: Lower index means higher precedence.
-PRECEDENCE = ['SUCCESS',
-              'FAILURE',
-              None,
-              'REVOKED',
-              'STARTED',
-              'RECEIVED',
-              'RETRY',
-              'PENDING']
+PRECEDENCE = [
+    'SUCCESS',
+    'FAILURE',
+    None,
+    'REVOKED',
+    'STARTED',
+    'RECEIVED',
+    'REJECTED',
+    'RETRY',
+    'PENDING',
+]
 
 #: Hash lookup of PRECEDENCE to index
 PRECEDENCE_LOOKUP = dict(zip(PRECEDENCE, range(0, len(PRECEDENCE))))
@@ -84,7 +84,6 @@ def precedence(state):
     """Get the precedence index for state.
 
     Lower index means higher precedence.
-
     """
     try:
         return PRECEDENCE_LOOKUP[state]
@@ -93,7 +92,9 @@ def precedence(state):
 
 
 class state(str):
-    """State is a subclass of :class:`str`, implementing comparison
+    """Task state.
+
+    State is a subclass of :class:`str`, implementing comparison
     methods adhering to state precedence rules::
 
         >>> from celery.states import state, PENDING, SUCCESS
@@ -109,11 +110,7 @@ class state(str):
 
         >>> state('PROGRESS') > state('SUCCESS')
         False
-
     """
-
-    def compare(self, other, fun):
-        return fun(precedence(self), precedence(other))
 
     def __gt__(self, other):
         return precedence(self) < precedence(other)
@@ -127,11 +124,12 @@ class state(str):
     def __le__(self, other):
         return precedence(self) >= precedence(other)
 
+
 #: Task state is unknown (assumed pending since you know the id).
 PENDING = 'PENDING'
-#: Task was received by a worker.
+#: Task was received by a worker (only used in events).
 RECEIVED = 'RECEIVED'
-#: Task was started by a worker (:setting:`CELERY_TRACK_STARTED`).
+#: Task was started by a worker (:setting:`task_track_started`).
 STARTED = 'STARTED'
 #: Task succeeded
 SUCCESS = 'SUCCESS'
@@ -139,15 +137,17 @@ SUCCESS = 'SUCCESS'
 FAILURE = 'FAILURE'
 #: Task was revoked.
 REVOKED = 'REVOKED'
+#: Task was rejected (only used in events).
+REJECTED = 'REJECTED'
 #: Task is waiting for retry.
 RETRY = 'RETRY'
 IGNORED = 'IGNORED'
-REJECTED = 'REJECTED'
 
-READY_STATES = frozenset([SUCCESS, FAILURE, REVOKED])
-UNREADY_STATES = frozenset([PENDING, RECEIVED, STARTED, RETRY])
-EXCEPTION_STATES = frozenset([RETRY, FAILURE, REVOKED])
-PROPAGATE_STATES = frozenset([FAILURE, REVOKED])
+READY_STATES = frozenset({SUCCESS, FAILURE, REVOKED})
+UNREADY_STATES = frozenset({PENDING, RECEIVED, STARTED, REJECTED, RETRY})
+EXCEPTION_STATES = frozenset({RETRY, FAILURE, REVOKED})
+PROPAGATE_STATES = frozenset({FAILURE, REVOKED})
 
-ALL_STATES = frozenset([PENDING, RECEIVED, STARTED,
-                        SUCCESS, FAILURE, RETRY, REVOKED])
+ALL_STATES = frozenset({
+    PENDING, RECEIVED, STARTED, SUCCESS, FAILURE, RETRY, REVOKED,
+})

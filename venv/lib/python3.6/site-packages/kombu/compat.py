@@ -1,13 +1,8 @@
+"""Carrot compatibility interface.
+
+See https://pypi.python.org/pypi/carrot for documentation.
 """
-kombu.compat
-============
-
-Carrot compatible interface for :class:`Publisher` and :class:`Producer`.
-
-See http://packages.python.org/pypi/carrot for documentation.
-
-"""
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals
 
 from itertools import count
 
@@ -25,11 +20,13 @@ def _iterconsume(connection, consumer, no_ack=False, limit=None):
     consumer.consume(no_ack=no_ack)
     for iteration in count(0):  # for infinity
         if limit and iteration >= limit:
-            raise StopIteration
+            break
         yield connection.drain_events()
 
 
 class Publisher(messaging.Producer):
+    """Carrot compatible producer."""
+
     exchange = ''
     exchange_type = 'direct'
     routing_key = ''
@@ -79,6 +76,8 @@ class Publisher(messaging.Producer):
 
 
 class Consumer(messaging.Consumer):
+    """Carrot compatible consumer."""
+
     queue = ''
     exchange = ''
     routing_key = ''
@@ -86,7 +85,6 @@ class Consumer(messaging.Consumer):
     durable = True
     exclusive = False
     auto_delete = False
-    exchange_type = 'direct'
     _closed = False
 
     def __init__(self, connection, queue=None, exchange=None,
@@ -167,7 +165,7 @@ class Consumer(messaging.Consumer):
             item = self.fetch()
             if (not infinite and item is None) or \
                     (limit and items_since_start >= limit):
-                raise StopIteration
+                break
             yield item
 
 
@@ -199,7 +197,7 @@ class ConsumerSet(messaging.Consumer):
         return self.purge()
 
     def add_consumer_from_dict(self, queue, **options):
-        return self.add_queue_from_dict(queue, **options)
+        return self.add_queue(Queue.from_dict(queue, **options))
 
     def add_consumer(self, consumer):
         for queue in consumer.queues:

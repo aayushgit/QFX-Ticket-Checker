@@ -2,9 +2,10 @@
 # SQLAlchemy overrides != False to have special meaning and pep8 complains
 # flake8: noqa
 
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals
 
-from anyjson import loads, dumps
+from json import loads, dumps
+
 from sqlalchemy import create_engine
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
@@ -13,7 +14,6 @@ from kombu.five import Empty
 from kombu.transport import virtual
 from kombu.utils import cached_property
 from kombu.utils.encoding import bytes_to_str
-
 from .models import (ModelBase, Queue as QueueBase, Message as MessageBase,
                      class_registry, metadata)
 
@@ -23,6 +23,8 @@ __version__ = '.'.join(map(str, VERSION))
 
 
 class Channel(virtual.Channel):
+    """The channel class."""
+
     _session = None
     _engines = {}   # engine cache
 
@@ -127,7 +129,7 @@ class Channel(virtual.Channel):
     def _declarative_cls(self, name, base, ns):
         if name in class_registry:
             return class_registry[name]
-        return type(name, (base, ModelBase), ns)
+        return type(str(name), (base, ModelBase), ns)
 
     @cached_property
     def queue_cls(self):
@@ -147,6 +149,8 @@ class Channel(virtual.Channel):
 
 
 class Transport(virtual.Transport):
+    """The transport class."""
+
     Channel = Channel
 
     can_parse_url = True

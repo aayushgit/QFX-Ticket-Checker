@@ -1,4 +1,5 @@
-from __future__ import absolute_import
+"""Logging Utilities."""
+from __future__ import absolute_import, unicode_literals
 
 import logging
 import numbers
@@ -8,9 +9,9 @@ import sys
 from logging.handlers import WatchedFileHandler
 
 from .five import string_t
-from .utils import cached_property
 from .utils.encoding import safe_repr, safe_str
 from .utils.functional import maybe_evaluate
+from .utils.objects import cached_property
 
 __all__ = ['LogMixin', 'LOG_LEVELS', 'get_loglevel', 'setup_logging']
 
@@ -24,21 +25,17 @@ LOG_LEVELS.setdefault(logging.FATAL, 'FATAL')
 DISABLE_TRACEBACKS = os.environ.get('DISABLE_TRACEBACKS')
 
 
-class NullHandler(logging.Handler):
-
-    def emit(self, record):
-        pass
-
-
 def get_logger(logger):
+    """Get logger by name."""
     if isinstance(logger, string_t):
         logger = logging.getLogger(logger)
     if not logger.handlers:
-        logger.addHandler(NullHandler())
+        logger.addHandler(logging.NullHandler())
     return logger
 
 
 def get_loglevel(level):
+    """Get loglevel by name."""
     if isinstance(level, string_t):
         return LOG_LEVELS[level]
     return level
@@ -59,6 +56,7 @@ def safeify_format(fmt, args,
 
 
 class LogMixin(object):
+    """Mixin that adds severity methods to any class."""
 
     def debug(self, *args, **kwargs):
         return self.log(logging.DEBUG, *args, **kwargs)
@@ -134,6 +132,7 @@ class Log(LogMixin):
 
 
 def setup_logging(loglevel=None, logfile=None):
+    """Setup logging."""
     logger = logging.getLogger()
     loglevel = get_loglevel(loglevel or 'ERROR')
     logfile = logfile if logfile else sys.__stderr__

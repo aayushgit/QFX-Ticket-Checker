@@ -1,13 +1,10 @@
 # -*- coding: utf-8 -*-
-"""
-    celery.platforms
-    ~~~~~~~~~~~~~~~~
+"""Platforms.
 
-    Utilities dealing with platform specifics: signals, daemonization,
-    users, groups, and so on.
-
+Utilities dealing with platform specifics: signals, daemonization,
+users, groups, and so on.
 """
-from __future__ import absolute_import, print_function
+from __future__ import absolute_import, print_function, unicode_literals
 
 import atexit
 import errno
@@ -18,19 +15,22 @@ import platform as _platform
 import signal as _signal
 import sys
 import warnings
-
 from collections import namedtuple
-
-from billiard import current_process
-# fileno used to be in this module
-from kombu.utils import maybe_fileno
-from kombu.utils.compat import get_errno
-from kombu.utils.encoding import safe_str
 from contextlib import contextmanager
 
+from billiard.compat import close_open_fds, get_fdmax
+# fileno used to be in this module
+from kombu.utils.compat import maybe_fileno
+from kombu.utils.encoding import safe_str
+
+from .exceptions import SecurityError
+from .five import items, reraise, string_t
 from .local import try_import
-from .five import items, range, reraise, string_t, zip_longest
-from .utils.functional import uniq
+
+try:
+    from billiard.process import current_process
+except ImportError:  # pragma: no cover
+    current_process = None
 
 _setproctitle = try_import('setproctitle')
 resource = try_import('resource')
@@ -38,14 +38,15 @@ pwd = try_import('pwd')
 grp = try_import('grp')
 mputil = try_import('multiprocessing.util')
 
-__all__ = ['EX_OK', 'EX_FAILURE', 'EX_UNAVAILABLE', 'EX_USAGE', 'SYSTEM',
-           'IS_OSX', 'IS_WINDOWS', 'pyimplementation', 'LockFailed',
-           'get_fdmax', 'Pidfile', 'create_pidlock',
-           'close_open_fds', 'DaemonContext', 'detached', 'parse_uid',
-           'parse_gid', 'setgroups', 'initgroups', 'setgid', 'setuid',
-           'maybe_drop_privileges', 'signals', 'set_process_title',
-           'set_mp_process_title', 'get_errno_name', 'ignore_errno',
-           'fd_by_path']
+__all__ = (
+    'EX_OK', 'EX_FAILURE', 'EX_UNAVAILABLE', 'EX_USAGE', 'SYSTEM',
+    'IS_macOS', 'IS_WINDOWS', 'SIGMAP', 'pyimplementation', 'LockFailed',
+    'get_fdmax', 'Pidfile', 'create_pidlock', 'close_open_fds',
+    'DaemonContext', 'detached', 'parse_uid', 'parse_gid', 'setgroups',
+    'initgroups', 'setgid', 'setuid', 'maybe_drop_privileges', 'signals',
+    'signal_name', 'set_process_title', 'set_mp_process_title',
+    'get_errno_name', 'ignore_errno', 'fd_by_path', 'isatty',
+)
 
 # exitcodes
 EX_OK = getattr(os, 'EX_OK', 0)
@@ -55,7 +56,7 @@ EX_USAGE = getattr(os, 'EX_USAGE', 64)
 EX_CANTCREAT = getattr(os, 'EX_CANTCREAT', 73)
 
 SYSTEM = _platform.system()
-IS_OSX = SYSTEM == 'Darwin'
+IS_macOS = SYSTEM == 'Darwin'
 IS_WINDOWS = SYSTEM == 'Windows'
 
 DAEMON_WORKDIR = '/'
@@ -81,13 +82,27 @@ User information: uid={uid} euid={euid} gid={gid} egid={egid}
 """
 
 ROOT_DISCOURAGED = """\
-You are running the worker with superuser privileges, which is
+You're running the worker with superuser privileges: this is
 absolutely not recommended!
 
-Please specify a different user using the -u option.
+Please specify a different user using the --uid option.
 
 User information: uid={uid} euid={euid} gid={gid} egid={egid}
 """
+
+SIGNAMES = {
+    sig for sig in dir(_signal)
+    if sig.startswith('SIG') and '_' not in sig
+}
+SIGMAP = {getattr(_signal, name): name for name in SIGNAMES}
+
+
+def isatty(fh):
+    """Return true if the process has a controlling terminal."""
+    try:
+        return fh.isatty()
+    except AttributeError:
+        pass
 
 
 def pyimplementation():
@@ -106,38 +121,19 @@ def pyimplementation():
 
 
 class LockFailed(Exception):
-    """Raised if a pidlock can't be acquired."""
-
-
-def get_fdmax(default=None):
-    """Return the maximum number of open file descriptors
-    on this system.
-
-    :keyword default: Value returned if there's no file
-                      descriptor limit.
-
-    """
-    try:
-        return os.sysconf('SC_OPEN_MAX')
-    except:
-        pass
-    if resource is None:  # Windows
-        return default
-    fdmax = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
-    if fdmax == resource.RLIM_INFINITY:
-        return default
-    return fdmax
+    """Raised if a PID lock can't be acquired."""
 
 
 class Pidfile(object):
-    """Pidfile
+    """Pidfile.
 
     This is the type returned by :func:`create_pidlock`.
 
-    TIP: Use the :func:`create_pidlock` function instead,
-    which is more convenient and also removes stale pidfiles (when
-    the process holding the lock is no longer running).
-
+    See Also:
+        Best practice is to not use this directly but rather use
+        the :func:`create_pidlock` function instead:
+        more convenient and also removes stale pidfiles (when
+        the process holding the lock is no longer running).
     """
 
     #: Path to the pid lock file.
@@ -185,12 +181,14 @@ class Pidfile(object):
             os.unlink(self.path)
 
     def remove_if_stale(self):
-        """Remove the lock if the process is not running.
-        (does not respond to signals)."""
+        """Remove the lock if the process isn't running.
+
+        I.e. process does not respons to signal.
+        """
         try:
             pid = self.read_pid()
         except ValueError as exc:
-            print('Broken pidfile found. Removing it.', file=sys.stderr)
+            print('Broken pidfile found - Removing it.', file=sys.stderr)
             self.remove()
             return True
         if not pid:
@@ -201,7 +199,7 @@ class Pidfile(object):
             os.kill(pid, 0)
         except os.error as exc:
             if exc.errno == errno.ESRCH:
-                print('Stale pidfile exists. Removing it.', file=sys.stderr)
+                print('Stale pidfile exists - Removing it.', file=sys.stderr)
                 self.remove()
                 return True
         return False
@@ -230,28 +228,27 @@ class Pidfile(object):
                     "Inconsistency: Pidfile content doesn't match at re-read")
         finally:
             rfh.close()
-PIDFile = Pidfile  # compat alias
+
+
+PIDFile = Pidfile  # noqa: E305 XXX compat alias
 
 
 def create_pidlock(pidfile):
     """Create and verify pidfile.
 
     If the pidfile already exists the program exits with an error message,
-    however if the process it refers to is not running anymore, the pidfile
+    however if the process it refers to isn't running anymore, the pidfile
     is deleted and the program continues.
 
     This function will automatically install an :mod:`atexit` handler
     to release the lock at exit, you can skip this by calling
     :func:`_create_pidlock` instead.
 
-    :returns: :class:`Pidfile`.
+    Returns:
+       Pidfile: used to manage the lock.
 
-    **Example**:
-
-    .. code-block:: python
-
-        pidlock = create_pidlock('/var/run/app.pid')
-
+    Example:
+        >>> pidlock = create_pidlock('/var/run/app.pid')
     """
     pidlock = _create_pidlock(pidfile)
     atexit.register(pidlock.release)
@@ -268,21 +265,19 @@ def _create_pidlock(pidfile):
 
 
 def fd_by_path(paths):
-    """Return a list of fds.
+    """Return a list of file descriptors.
 
-    This method returns list of fds corresponding to
+    This method returns list of file descriptors corresponding to
     file paths passed in paths variable.
 
-    :keyword paths: List of file paths go get fd for.
+    Arguments:
+        paths: List[str]: List of file paths.
 
-    :returns: :list:.
+    Returns:
+        List[int]: List of file descriptors.
 
-    **Example**:
-
-    .. code-block:: python
-
-        keep = fd_by_path(['/dev/urandom',
-                           '/my/precious/'])
+    Example:
+        >>> keep = fd_by_path(['/dev/urandom', '/my/precious/'])
     """
     stats = set()
     for path in paths:
@@ -304,31 +299,9 @@ def fd_by_path(paths):
     return [_fd for _fd in range(get_fdmax(2048)) if fd_in_stats(_fd)]
 
 
-if hasattr(os, 'closerange'):
-
-    def close_open_fds(keep=None):
-        # must make sure this is 0-inclusive (Issue #1882)
-        keep = list(uniq(sorted(
-            f for f in map(maybe_fileno, keep or []) if f is not None
-        )))
-        maxfd = get_fdmax(default=2048)
-        kL, kH = iter([-1] + keep), iter(keep + [maxfd])
-        for low, high in zip_longest(kL, kH):
-            if low + 1 != high:
-                os.closerange(low + 1, high)
-
-else:
-
-    def close_open_fds(keep=None):  # noqa
-        keep = [maybe_fileno(f)
-                for f in (keep or []) if maybe_fileno(f) is not None]
-        for fd in reversed(range(get_fdmax(default=2048))):
-            if fd not in keep:
-                with ignore_errno(errno.EBADF):
-                    os.close(fd)
-
-
 class DaemonContext(object):
+    """Context manager daemonizing the process."""
+
     _is_open = False
 
     def __init__(self, pidfile=None, workdir=None, umask=None,
@@ -382,7 +355,8 @@ class DaemonContext(object):
     def _detach(self):
         if os.fork() == 0:      # first child
             os.setsid()         # create new session
-            if os.fork() > 0:   # second child
+            if os.fork() > 0:   # pragma: no cover
+                # second child
                 os._exit(0)
         else:
             os._exit(0)
@@ -393,38 +367,38 @@ def detached(logfile=None, pidfile=None, uid=None, gid=None, umask=0,
              workdir=None, fake=False, **opts):
     """Detach the current process in the background (daemonize).
 
-    :keyword logfile: Optional log file.  The ability to write to this file
-       will be verified before the process is detached.
-    :keyword pidfile: Optional pidfile.  The pidfile will not be created,
-      as this is the responsibility of the child.  But the process will
-      exit if the pid lock exists and the pid written is still running.
-    :keyword uid: Optional user id or user name to change
-      effective privileges to.
-    :keyword gid: Optional group id or group name to change effective
-      privileges to.
-    :keyword umask: Optional umask that will be effective in the child process.
-    :keyword workdir: Optional new working directory.
-    :keyword fake: Don't actually detach, intented for debugging purposes.
-    :keyword \*\*opts: Ignored.
+    Arguments:
+        logfile (str): Optional log file.
+            The ability to write to this file
+            will be verified before the process is detached.
+        pidfile (str): Optional pid file.
+            The pidfile won't be created,
+            as this is the responsibility of the child.  But the process will
+            exit if the pid lock exists and the pid written is still running.
+        uid (int, str): Optional user id or user name to change
+            effective privileges to.
+        gid (int, str): Optional group id or group name to change
+            effective privileges to.
+        umask (str, int): Optional umask that'll be effective in
+            the child process.
+        workdir (str): Optional new working directory.
+        fake (bool): Don't actually detach, intended for debugging purposes.
+        **opts (Any): Ignored.
 
-    **Example**:
-
-    .. code-block:: python
-
-        from celery.platforms import detached, create_pidlock
-
-        with detached(logfile='/var/log/app.log', pidfile='/var/run/app.pid',
-                      uid='nobody'):
-            # Now in detached child process with effective user set to nobody,
-            # and we know that our logfile can be written to, and that
-            # the pidfile is not locked.
-            pidlock = create_pidlock('/var/run/app.pid')
-
-            # Run the program
-            program.run(logfile='/var/log/app.log')
-
+    Example:
+        >>> from celery.platforms import detached, create_pidlock
+        >>> with detached(
+        ...           logfile='/var/log/app.log',
+        ...           pidfile='/var/run/app.pid',
+        ...           uid='nobody'):
+        ... # Now in detached child process with effective user set to nobody,
+        ... # and we know that our logfile can be written to, and that
+        ... # the pidfile isn't locked.
+        ... pidlock = create_pidlock('/var/run/app.pid')
+        ...
+        ... # Run the program
+        ... program.run(logfile='/var/log/app.log')
     """
-
     if not resource:
         raise RuntimeError('This platform does not support detach.')
     workdir = os.getcwd() if workdir is None else workdir
@@ -448,9 +422,10 @@ def detached(logfile=None, pidfile=None, uid=None, gid=None, umask=0,
 def parse_uid(uid):
     """Parse user id.
 
-    uid can be an integer (uid) or a string (user name), if a user name
-    the uid is taken from the system user registry.
-
+    Arguments:
+        uid (str, int): Actual uid, or the username of a user.
+    Returns:
+        int: The actual uid.
     """
     try:
         return int(uid)
@@ -464,9 +439,10 @@ def parse_uid(uid):
 def parse_gid(gid):
     """Parse group id.
 
-    gid can be an integer (gid) or a string (group name), if a group name
-    the gid is taken from the system group registry.
-
+    Arguments:
+        gid (str, int): Actual gid, or the name of a group.
+    Returns:
+        int: The actual gid of the group.
     """
     try:
         return int(gid)
@@ -478,9 +454,9 @@ def parse_gid(gid):
 
 
 def _setgroups_hack(groups):
-    """:fun:`setgroups` may have a platform-dependent limit,
-    and it is not always possible to know in advance what this limit
-    is, so we use this ugly hack stolen from glibc."""
+    # :fun:`setgroups` may have a platform-dependent limit,
+    # and it's not always possible to know in advance what this limit
+    # is, so we use this ugly hack stolen from glibc.
     groups = groups[:]
 
     while 1:
@@ -501,7 +477,7 @@ def setgroups(groups):
     max_groups = None
     try:
         max_groups = os.sysconf('SC_NGROUPS_MAX')
-    except Exception:
+    except Exception:  # pylint: disable=broad-except
         pass
     try:
         return _setgroups_hack(groups[:max_groups])
@@ -514,8 +490,11 @@ def setgroups(groups):
 
 
 def initgroups(uid, gid):
-    """Compat version of :func:`os.initgroups` which was first
-    added to Python 2.7."""
+    """Init process group permissions.
+
+    Compat version of :func:`os.initgroups` that was first
+    added to Python 2.7.
+    """
     if not pwd:  # pragma: no cover
         return
     username = pwd.getpwuid(uid)[0]
@@ -545,61 +524,62 @@ def maybe_drop_privileges(uid=None, gid=None):
     changed to the users primary group.
 
     If only GID is specified, only the group is changed.
-
     """
     if sys.platform == 'win32':
         return
     if os.geteuid():
         # no point trying to setuid unless we're root.
         if not os.getuid():
-            raise AssertionError('contact support')
+            raise SecurityError('contact support')
     uid = uid and parse_uid(uid)
     gid = gid and parse_gid(gid)
 
     if uid:
-        # If GID isn't defined, get the primary GID of the user.
-        if not gid and pwd:
-            gid = pwd.getpwuid(uid).pw_gid
-        # Must set the GID before initgroups(), as setgid()
-        # is known to zap the group list on some platforms.
-
-        # setgid must happen before setuid (otherwise the setgid operation
-        # may fail because of insufficient privileges and possibly stay
-        # in a privileged group).
-        setgid(gid)
-        initgroups(uid, gid)
-
-        # at last:
-        setuid(uid)
-        # ... and make sure privileges cannot be restored:
-        try:
-            setuid(0)
-        except OSError as exc:
-            if get_errno(exc) != errno.EPERM:
-                raise
-            pass  # Good: cannot restore privileges.
-        else:
-            raise RuntimeError(
-                'non-root user able to restore privileges after setuid.')
+        _setuid(uid, gid)
     else:
         gid and setgid(gid)
 
-    if uid and (not os.getuid()) and not (os.geteuid()):
-        raise AssertionError('Still root uid after drop privileges!')
-    if gid and (not os.getgid()) and not (os.getegid()):
-        raise AssertionError('Still root gid after drop privileges!')
+    if uid and not os.getuid() and not os.geteuid():
+        raise SecurityError('Still root uid after drop privileges!')
+    if gid and not os.getgid() and not os.getegid():
+        raise SecurityError('Still root gid after drop privileges!')
+
+
+def _setuid(uid, gid):
+    # If GID isn't defined, get the primary GID of the user.
+    if not gid and pwd:
+        gid = pwd.getpwuid(uid).pw_gid
+    # Must set the GID before initgroups(), as setgid()
+    # is known to zap the group list on some platforms.
+
+    # setgid must happen before setuid (otherwise the setgid operation
+    # may fail because of insufficient privileges and possibly stay
+    # in a privileged group).
+    setgid(gid)
+    initgroups(uid, gid)
+
+    # at last:
+    setuid(uid)
+    # ... and make sure privileges cannot be restored:
+    try:
+        setuid(0)
+    except OSError as exc:
+        if exc.errno != errno.EPERM:
+            raise
+        # we should get here: cannot restore privileges,
+        # everything was fine.
+    else:
+        raise SecurityError(
+            'non-root user able to restore privileges after setuid.')
 
 
 class Signals(object):
     """Convenience interface to :mod:`signals`.
 
-    If the requested signal is not supported on the current platform,
+    If the requested signal isn't supported on the current platform,
     the operation will be ignored.
 
-    **Examples**:
-
-    .. code-block:: python
-
+    Example:
         >>> from celery.platforms import signals
 
         >>> from proj.handlers import my_handler
@@ -626,7 +606,6 @@ class Signals(object):
         >>> signals.update(INT=exit_handler,
         ...                TERM=exit_handler,
         ...                HUP=hup_handler)
-
     """
 
     ignored = _signal.SIG_IGN
@@ -651,67 +630,72 @@ class Signals(object):
     def reset_alarm(self):
         return _signal.alarm(0)
 
-    def supported(self, signal_name):
-        """Return true value if ``signal_name`` exists on this platform."""
+    def supported(self, name):
+        """Return true value if signal by ``name`` exists on this platform."""
         try:
-            return self.signum(signal_name)
+            self.signum(name)
         except AttributeError:
-            pass
+            return False
+        else:
+            return True
 
-    def signum(self, signal_name):
-        """Get signal number from signal name."""
-        if isinstance(signal_name, numbers.Integral):
-            return signal_name
-        if not isinstance(signal_name, string_t) \
-                or not signal_name.isupper():
+    def signum(self, name):
+        """Get signal number by name."""
+        if isinstance(name, numbers.Integral):
+            return name
+        if not isinstance(name, string_t) \
+                or not name.isupper():
             raise TypeError('signal name must be uppercase string.')
-        if not signal_name.startswith('SIG'):
-            signal_name = 'SIG' + signal_name
-        return getattr(_signal, signal_name)
+        if not name.startswith('SIG'):
+            name = 'SIG' + name
+        return getattr(_signal, name)
 
     def reset(self, *signal_names):
         """Reset signals to the default signal handler.
 
-        Does nothing if the platform doesn't support signals,
+        Does nothing if the platform has no support for signals,
         or the specified signal in particular.
-
         """
         self.update((sig, self.default) for sig in signal_names)
 
-    def ignore(self, *signal_names):
+    def ignore(self, *names):
         """Ignore signal using :const:`SIG_IGN`.
 
-        Does nothing if the platform doesn't support signals,
+        Does nothing if the platform has no support for signals,
         or the specified signal in particular.
-
         """
-        self.update((sig, self.ignored) for sig in signal_names)
+        self.update((sig, self.ignored) for sig in names)
 
-    def __getitem__(self, signal_name):
-        return _signal.getsignal(self.signum(signal_name))
+    def __getitem__(self, name):
+        return _signal.getsignal(self.signum(name))
 
-    def __setitem__(self, signal_name, handler):
+    def __setitem__(self, name, handler):
         """Install signal handler.
 
-        Does nothing if the current platform doesn't support signals,
+        Does nothing if the current platform has no support for signals,
         or the specified signal in particular.
-
         """
         try:
-            _signal.signal(self.signum(signal_name), handler)
+            _signal.signal(self.signum(name), handler)
         except (AttributeError, ValueError):
             pass
 
     def update(self, _d_=None, **sigmap):
         """Set signal handlers from a mapping."""
-        for signal_name, handler in items(dict(_d_ or {}, **sigmap)):
-            self[signal_name] = handler
+        for name, handler in items(dict(_d_ or {}, **sigmap)):
+            self[name] = handler
+
 
 signals = Signals()
 get_signal = signals.signum                   # compat
 install_signal_handler = signals.__setitem__  # compat
 reset_signal = signals.reset                  # compat
 ignore_signal = signals.ignore                # compat
+
+
+def signal_name(signum):
+    """Return name of signal from signal number."""
+    return SIGMAP[signum][3:]
 
 
 def strargv(argv):
@@ -722,10 +706,9 @@ def strargv(argv):
 
 
 def set_process_title(progname, info=None):
-    """Set the ps name for the currently running process.
+    """Set the :command:`ps` name for the currently running process.
 
-    Only works if :mod:`setproctitle` is installed.
-
+    Only works if :pypi:`setproctitle` is installed.
     """
     proctitle = '[{0}]'.format(progname)
     proctitle = '{0} {1}'.format(proctitle, info) if info else proctitle
@@ -737,23 +720,22 @@ def set_process_title(progname, info=None):
 if os.environ.get('NOSETPS'):  # pragma: no cover
 
     def set_mp_process_title(*a, **k):
-        pass
+        """Disabled feature."""
 else:
 
     def set_mp_process_title(progname, info=None, hostname=None):  # noqa
-        """Set the ps name using the multiprocessing process name.
+        """Set the :command:`ps` name from the current process name.
 
-        Only works if :mod:`setproctitle` is installed.
-
+        Only works if :pypi:`setproctitle` is installed.
         """
         if hostname:
             progname = '{0}: {1}'.format(progname, hostname)
-        return set_process_title(
-            '{0}:{1}'.format(progname, current_process().name), info=info)
+        name = current_process().name if current_process else 'MainProcess'
+        return set_process_title('{0}:{1}'.format(progname, name), info=info)
 
 
 def get_errno_name(n):
-    """Get errno for string, e.g. ``ENOENT``."""
+    """Get errno for string (e.g., ``ENOENT``)."""
     if isinstance(n, string_t):
         return getattr(errno, n)
     return n
@@ -763,7 +745,7 @@ def get_errno_name(n):
 def ignore_errno(*errnos, **kwargs):
     """Context manager to ignore specific POSIX error codes.
 
-    Takes a list of error codes to ignore, which can be either
+    Takes a list of error codes to ignore: this can be either
     the name of the code, or the code integer itself::
 
         >>> with ignore_errno('ENOENT'):
@@ -773,10 +755,11 @@ def ignore_errno(*errnos, **kwargs):
         >>> with ignore_errno(errno.ENOENT, errno.EPERM):
         ...    pass
 
-    :keyword types: A tuple of exceptions to ignore (when the errno matches),
-                    defaults to :exc:`Exception`.
+    Arguments:
+        types (Tuple[Exception]): A tuple of exceptions to ignore
+            (when the errno matches).  Defaults to :exc:`Exception`.
     """
-    types = kwargs.get('types') or (Exception, )
+    types = kwargs.get('types') or (Exception,)
     errnos = [get_errno_name(errno) for errno in errnos]
     try:
         yield
@@ -796,7 +779,7 @@ def check_privileges(accept_content):
     if hasattr(os, 'fchown'):
         if not all(hasattr(os, attr)
                    for attr in ['getuid', 'getgid', 'geteuid', 'getegid']):
-            raise AssertionError('suspicious platform, contact support')
+            raise SecurityError('suspicious platform, contact support')
 
     if not uid or not gid or not euid or not egid:
         if ('pickle' in accept_content or
@@ -807,6 +790,7 @@ def check_privileges(accept_content):
                         uid=uid, euid=euid, gid=gid, egid=egid,
                     ), file=sys.stderr)
                 finally:
+                    sys.stderr.flush()
                     os._exit(1)
         warnings.warn(RuntimeWarning(ROOT_DISCOURAGED.format(
             uid=uid, euid=euid, gid=gid, egid=egid,

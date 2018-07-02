@@ -1,27 +1,33 @@
 # -*- coding: utf-8 -*-
-from __future__ import absolute_import
+"""System information utilities."""
+from __future__ import absolute_import, unicode_literals
 
 import os
-
 from math import ceil
 
-from kombu.utils import cached_property
+from kombu.utils.objects import cached_property
 
-__all__ = ['load_average', 'df']
+__all__ = ('load_average', 'df')
 
 
 if hasattr(os, 'getloadavg'):
 
-    def load_average():
+    def _load_average():
         return tuple(ceil(l * 1e2) / 1e2 for l in os.getloadavg())
 
 else:  # pragma: no cover
     # Windows doesn't have getloadavg
-    def load_average():  # noqa
+    def _load_average():  # noqa
         return (0.0, 0.0, 0.0)
 
 
+def load_average():
+    """Return system load average as a triple."""
+    return _load_average()
+
+
 class df(object):
+    """Disk information."""
 
     def __init__(self, path):
         self.path = path

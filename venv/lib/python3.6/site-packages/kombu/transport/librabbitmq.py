@@ -1,13 +1,8 @@
+"""`librabbitmq`_ transport.
+
+.. _`librabbitmq`: https://pypi.python.org/librabbitmq/
 """
-kombu.transport.librabbitmq
-===========================
-
-`librabbitmq`_ transport.
-
-.. _`librabbitmq`: http://pypi.python.org/librabbitmq/
-
-"""
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals
 
 import os
 import socket
@@ -21,6 +16,7 @@ from kombu.utils.amq_manager import get_manager
 from kombu.utils.text import version_string_as_tuple
 
 from . import base
+from .base import to_rabbitmq_queue_arguments
 
 W_VERSION = """
     librabbitmq version too old to detect RabbitMQ version information
@@ -35,10 +31,11 @@ ssl not supported by librabbitmq, please use pyamqp:// or stunnel\
 
 
 class Message(base.Message):
+    """AMQP Message (librabbitmq)."""
 
     def __init__(self, channel, props, info, body):
         super(Message, self).__init__(
-            channel,
+            channel=channel,
             body=body,
             delivery_info=info,
             properties=props,
@@ -49,6 +46,8 @@ class Message(base.Message):
 
 
 class Channel(amqp.Channel, base.StdChannel):
+    """AMQP Channel (librabbitmq)."""
+
     Message = Message
 
     def prepare_message(self, body, priority=None,
@@ -62,13 +61,21 @@ class Channel(amqp.Channel, base.StdChannel):
                            'priority': priority})
         return body, properties
 
+    def prepare_queue_arguments(self, arguments, **kwargs):
+        arguments = to_rabbitmq_queue_arguments(arguments, **kwargs)
+        return {k.encode('utf8'): v for k, v in items(arguments)}
+
 
 class Connection(amqp.Connection):
+    """AMQP Connection (librabbitmq)."""
+
     Channel = Channel
     Message = Message
 
 
 class Transport(base.Transport):
+    """AMQP Transport (librabbitmq)."""
+
     Connection = Connection
 
     default_port = DEFAULT_PORT
@@ -79,12 +86,15 @@ class Transport(base.Transport):
             ConnectionError, socket.error, IOError, OSError)
     )
     channel_errors = (
-        base.Transport.channel_errors + (ChannelError, )
+        base.Transport.channel_errors + (ChannelError,)
     )
     driver_type = 'amqp'
     driver_name = 'librabbitmq'
 
-    supports_ev = True
+    implements = base.Transport.implements.extend(
+        asynchronous=True,
+        heartbeats=False,
+    )
 
     def __init__(self, client, **kwargs):
         self.client = client
@@ -136,7 +146,7 @@ class Transport(base.Transport):
                 channel.connection = None
             try:
                 os.close(connection.fileno())
-            except OSError:
+            except (OSError, ValueError):
                 pass
             connection.channels.clear()
             connection.callbacks.clear()

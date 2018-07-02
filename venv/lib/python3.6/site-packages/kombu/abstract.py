@@ -1,17 +1,12 @@
-"""
-kombu.abstract
-==============
-
-Object utilities.
-
-"""
-from __future__ import absolute_import
+"""Object utilities."""
+from __future__ import absolute_import, unicode_literals
 
 from copy import copy
 
 from .connection import maybe_channel
 from .exceptions import NotBoundError
-from .utils import ChannelPromise
+from .five import python_2_unicode_compatible
+from .utils.functional import ChannelPromise
 
 __all__ = ['Object', 'MaybeChannelBound']
 
@@ -25,8 +20,11 @@ def _any(v):
 
 
 class Object(object):
-    """Common base class supporting automatic kwargs->attributes handling,
-    and cloning."""
+    """Common base class.
+
+    Supports automatic kwargs->attributes handling, and cloning.
+    """
+
     attrs = ()
 
     def __init__(self, *args, **kwargs):
@@ -44,10 +42,10 @@ class Object(object):
         def f(obj, type):
             if recurse and isinstance(obj, Object):
                 return obj.as_dict(recurse=True)
-            return type(obj) if type else obj
-        return dict(
-            (attr, f(getattr(self, attr), type)) for attr, type in self.attrs
-        )
+            return type(obj) if type and obj is not None else obj
+        return {
+            attr: f(getattr(self, attr), type) for attr, type in self.attrs
+        }
 
     def __reduce__(self):
         return unpickle_dict, (self.__class__, self.as_dict())
@@ -56,8 +54,10 @@ class Object(object):
         return self.__class__(**self.as_dict())
 
 
+@python_2_unicode_compatible
 class MaybeChannelBound(Object):
     """Mixin for classes that can be bound to an AMQP channel."""
+
     _channel = None
     _is_bound = False
 
@@ -65,7 +65,7 @@ class MaybeChannelBound(Object):
     can_cache_declaration = False
 
     def __call__(self, channel):
-        """`self(channel) -> self.bind(channel)`"""
+        """`self(channel) -> self.bind(channel)`."""
         return self.bind(channel)
 
     def bind(self, channel):
@@ -94,7 +94,10 @@ class MaybeChannelBound(Object):
         """Callback called when the class is bound."""
         pass
 
-    def __repr__(self, item=''):
+    def __repr__(self):
+        return self._repr_entity(type(self).__name__)
+
+    def _repr_entity(self, item=''):
         item = item or type(self).__name__
         if self.is_bound:
             return '<{0} bound to chan:{1}>'.format(

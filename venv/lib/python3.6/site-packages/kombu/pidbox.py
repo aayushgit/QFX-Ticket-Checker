@@ -1,16 +1,11 @@
-"""
-kombu.pidbox
-===============
-
-Generic process mailbox.
-
-"""
-from __future__ import absolute_import
+"""Generic process mailbox."""
+from __future__ import absolute_import, unicode_literals
 
 import socket
 import warnings
 
 from collections import defaultdict, deque
+from contextlib import contextmanager
 from copy import copy
 from itertools import count
 from threading import local
@@ -22,9 +17,9 @@ from .common import maybe_declare, oid_from
 from .exceptions import InconsistencyError
 from .five import range
 from .log import get_logger
-from .utils import cached_property, kwdict, uuid, reprcall
-
-REPLY_QUEUE_EXPIRES = 10
+from .utils.functional import maybe_evaluate, reprcall
+from .utils.objects import cached_property
+from .utils.uuid import uuid
 
 W_PIDBOX_IN_USE = """\
 A node named {node.hostname} is already using this process mailbox!
@@ -40,6 +35,7 @@ debug, error = logger.debug, logger.error
 
 
 class Node(object):
+    """Mailbox node."""
 
     #: hostname of the node.
     hostname = None
@@ -102,7 +98,7 @@ class Node(object):
               reprcall(method, (), kwargs=arguments), reply_to, ticket)
         handle = reply_to and self.handle_call or self.handle_cast
         try:
-            reply = handle(method, kwdict(arguments))
+            reply = handle(method, arguments)
         except SystemExit:
             raise
         except Exception as exc:
@@ -130,7 +126,7 @@ class Node(object):
         if message:
             self.adjust_clock(message.headers.get('clock') or 0)
         if not destination or self.hostname in destination:
-            return self.dispatch(**kwdict(body))
+            return self.dispatch(**body)
     dispatch_from_message = handle_message
 
     def reply(self, data, exchange, routing_key, ticket, **kwargs):
@@ -140,6 +136,8 @@ class Node(object):
 
 
 class Mailbox(object):
+    """Process Mailbox."""
+
     node_cls = Node
     exchange_fmt = '%s.pidbox'
     reply_exchange_fmt = 'reply.%s.pidbox'
@@ -167,7 +165,9 @@ class Mailbox(object):
 
     def __init__(self, namespace,
                  type='direct', connection=None, clock=None,
-                 accept=None, serializer=None):
+                 accept=None, serializer=None, producer_pool=None,
+                 queue_ttl=None, queue_expires=None,
+                 reply_queue_ttl=None, reply_queue_expires=10.0):
         self.namespace = namespace
         self.connection = connection
         self.type = type
@@ -178,6 +178,11 @@ class Mailbox(object):
         self.unclaimed = defaultdict(deque)
         self.accept = self.accept if accept is None else accept
         self.serializer = self.serializer if serializer is None else serializer
+        self.queue_ttl = queue_ttl
+        self.queue_expires = queue_expires
+        self.reply_queue_ttl = reply_queue_ttl
+        self.reply_queue_expires = reply_queue_expires
+        self._producer_pool = producer_pool
 
     def __call__(self, connection):
         bound = copy(self)
@@ -216,7 +221,8 @@ class Mailbox(object):
             routing_key=oid,
             durable=False,
             auto_delete=True,
-            queue_arguments={'x-expires': int(REPLY_QUEUE_EXPIRES * 1000)},
+            expires=self.reply_queue_expires,
+            message_ttl=self.reply_queue_ttl,
         )
 
     @cached_property
@@ -224,32 +230,47 @@ class Mailbox(object):
         return self.get_reply_queue()
 
     def get_queue(self, hostname):
-        return Queue('%s.%s.pidbox' % (hostname, self.namespace),
-                     exchange=self.exchange,
-                     durable=False,
-                     auto_delete=True)
+        return Queue(
+            '%s.%s.pidbox' % (hostname, self.namespace),
+            exchange=self.exchange,
+            durable=False,
+            auto_delete=True,
+            expires=self.queue_expires,
+            message_ttl=self.queue_ttl,
+        )
+
+    @contextmanager
+    def producer_or_acquire(self, producer=None, channel=None):
+        if producer:
+            yield producer
+        elif self.producer_pool:
+            with self.producer_pool.acquire() as producer:
+                yield producer
+        else:
+            yield Producer(channel, auto_declare=False)
 
     def _publish_reply(self, reply, exchange, routing_key, ticket,
-                       channel=None, **opts):
+                       channel=None, producer=None, **opts):
         chan = channel or self.connection.default_channel
         exchange = Exchange(exchange, exchange_type='direct',
                             delivery_mode='transient',
                             durable=False)
-        producer = Producer(chan, auto_declare=False)
-        try:
-            producer.publish(
-                reply, exchange=exchange, routing_key=routing_key,
-                declare=[exchange], headers={
-                    'ticket': ticket, 'clock': self.clock.forward(),
-                },
-                **opts
-            )
-        except InconsistencyError:
-            pass   # queue probably deleted and no one is expecting a reply.
+        with self.producer_or_acquire(producer, chan) as producer:
+            try:
+                producer.publish(
+                    reply, exchange=exchange, routing_key=routing_key,
+                    declare=[exchange], headers={
+                        'ticket': ticket, 'clock': self.clock.forward(),
+                    },
+                    **opts
+                )
+            except InconsistencyError:
+                # queue probably deleted and no one is expecting a reply.
+                pass
 
     def _publish(self, type, arguments, destination=None,
                  reply_ticket=None, channel=None, timeout=None,
-                 serializer=None):
+                 serializer=None, producer=None):
         message = {'method': type,
                    'arguments': arguments,
                    'destination': destination}
@@ -261,13 +282,13 @@ class Mailbox(object):
                            reply_to={'exchange': self.reply_exchange.name,
                                      'routing_key': self.oid})
         serializer = serializer or self.serializer
-        producer = Producer(chan, auto_declare=False)
-        producer.publish(
-            message, exchange=exchange.name, declare=[exchange],
-            headers={'clock': self.clock.forward(),
-                     'expires': time() + timeout if timeout else 0},
-            serializer=serializer,
-        )
+        with self.producer_or_acquire(producer, chan) as producer:
+            producer.publish(
+                message, exchange=exchange.name, declare=[exchange],
+                headers={'clock': self.clock.forward(),
+                         'expires': time() + timeout if timeout else 0},
+                serializer=serializer,
+            )
 
     def _broadcast(self, command, arguments=None, destination=None,
                    reply=False, timeout=1, limit=None,
@@ -362,3 +383,7 @@ class Mailbox(object):
         except AttributeError:
             oid = self._tls.OID = oid_from(self)
             return oid
+
+    @cached_property
+    def producer_pool(self):
+        return maybe_evaluate(self._producer_pool)

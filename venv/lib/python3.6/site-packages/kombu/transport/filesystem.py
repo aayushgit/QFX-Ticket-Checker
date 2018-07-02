@@ -1,13 +1,8 @@
+"""File-system Transport.
+
+Transport using the file-system as the message store.
 """
-kombu.transport.filesystem
-==========================
-
-Transport using the file system as the message store.
-
-"""
-from __future__ import absolute_import
-
-from anyjson import loads, dumps
+from __future__ import absolute_import, unicode_literals
 
 import os
 import shutil
@@ -17,8 +12,10 @@ import tempfile
 from . import virtual
 from kombu.exceptions import ChannelError
 from kombu.five import Empty, monotonic
-from kombu.utils import cached_property
 from kombu.utils.encoding import bytes_to_str, str_to_bytes
+from kombu.utils.json import loads, dumps
+from kombu.utils.objects import cached_property
+
 
 VERSION = (1, 0, 0)
 __version__ = '.'.join(map(str, VERSION))
@@ -37,10 +34,12 @@ if os.name == 'nt':
     __overlapped = pywintypes.OVERLAPPED()
 
     def lock(file, flags):
+        """Create file lock."""
         hfile = win32file._get_osfhandle(file.fileno())
         win32file.LockFileEx(hfile, flags, 0, 0xffff0000, __overlapped)
 
     def unlock(file):
+        """Remove file lock."""
         hfile = win32file._get_osfhandle(file.fileno())
         win32file.UnlockFileEx(hfile, 0, 0xffff0000, __overlapped)
 
@@ -50,9 +49,11 @@ elif os.name == 'posix':
     from fcntl import LOCK_EX, LOCK_SH, LOCK_NB     # noqa
 
     def lock(file, flags):  # noqa
+        """Create file lock."""
         fcntl.flock(file.fileno(), flags)
 
     def unlock(file):       # noqa
+        """Remove file lock."""
         fcntl.flock(file.fileno(), fcntl.LOCK_UN)
 else:
     raise RuntimeError(
@@ -60,10 +61,10 @@ else:
 
 
 class Channel(virtual.Channel):
+    """Filesystem Channel."""
 
     def _put(self, queue, payload, **kwargs):
         """Put `message` onto `queue`."""
-
         filename = '%s_%s.%s.msg' % (int(round(monotonic() * 1000)),
                                      uuid.uuid4(), queue)
         filename = os.path.join(self.data_folder_out, filename)
@@ -81,7 +82,6 @@ class Channel(virtual.Channel):
 
     def _get(self, queue):
         """Get next message from `queue`."""
-
         queue_find = '.' + queue + '.msg'
         folder = os.listdir(self.data_folder_in)
         folder = sorted(folder)
@@ -183,6 +183,8 @@ class Channel(virtual.Channel):
 
 
 class Transport(virtual.Transport):
+    """Filesystem Transport."""
+
     Channel = Channel
 
     default_port = 0

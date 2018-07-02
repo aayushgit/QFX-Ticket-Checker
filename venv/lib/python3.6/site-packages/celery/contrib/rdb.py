@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
-"""
-celery.contrib.rdb
-==================
+"""Remote Debugger.
 
-Remote debugger for Celery tasks running in multiprocessing pool workers.
-Inspired by http://snippets.dzone.com/posts/show/7248
+Introduction
+============
 
-**Usage**
+This is a remote debugger for Celery tasks running in multiprocessing
+pool workers.  Inspired by a lost post on dzone.com.
+
+Usage
+-----
 
 .. code-block:: python
 
@@ -19,41 +21,47 @@ Inspired by http://snippets.dzone.com/posts/show/7248
         rdb.set_trace()
         return result
 
-
-**Environment Variables**
+Environment Variables
+=====================
 
 .. envvar:: CELERY_RDB_HOST
 
-    Hostname to bind to.  Default is '127.0.01', which means the socket
-    will only be accessible from the local host.
+``CELERY_RDB_HOST``
+-------------------
+
+    Hostname to bind to.  Default is '127.0.01' (only accessable from
+    localhost).
 
 .. envvar:: CELERY_RDB_PORT
+
+``CELERY_RDB_PORT``
+-------------------
 
     Base port to bind to.  Default is 6899.
     The debugger will try to find an available port starting from the
     base port.  The selected port will be logged by the worker.
-
 """
-from __future__ import absolute_import, print_function
+from __future__ import absolute_import, print_function, unicode_literals
 
 import errno
 import os
 import socket
 import sys
-
 from pdb import Pdb
 
-from billiard import current_process
+from billiard.process import current_process
 
 from celery.five import range
 
-__all__ = ['CELERY_RDB_HOST', 'CELERY_RDB_PORT', 'default_port',
-           'Rdb', 'debugger', 'set_trace']
+__all__ = (
+    'CELERY_RDB_HOST', 'CELERY_RDB_PORT', 'DEFAULT_PORT',
+    'Rdb', 'debugger', 'set_trace',
+)
 
-default_port = 6899
+DEFAULT_PORT = 6899
 
 CELERY_RDB_HOST = os.environ.get('CELERY_RDB_HOST') or '127.0.0.1'
-CELERY_RDB_PORT = int(os.environ.get('CELERY_RDB_PORT') or default_port)
+CELERY_RDB_PORT = int(os.environ.get('CELERY_RDB_PORT') or DEFAULT_PORT)
 
 #: Holds the currently active debugger.
 _current = [None]
@@ -67,7 +75,7 @@ Please specify one using the CELERY_RDB_PORT environment variable.
 """
 
 BANNER = """\
-{self.ident}: Please telnet into {self.host} {self.port}.
+{self.ident}: Ready to connect: telnet {self.host} {self.port}
 
 Type `exit` in session to continue.
 
@@ -79,6 +87,8 @@ SESSION_ENDED = '{self.ident}: Session with {self.remote_addr} ended.'
 
 
 class Rdb(Pdb):
+    """Remote debugger."""
+
     me = 'Remote Debugger'
     _prev_outs = None
     _sock = None
@@ -117,6 +127,7 @@ class Rdb(Pdb):
         this_port = None
         for i in range(search_limit):
             _sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            _sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             this_port = port + skew + i
             try:
                 _sock.bind((host, this_port))
@@ -163,13 +174,12 @@ class Rdb(Pdb):
     do_q = do_exit = do_quit
 
     def set_quit(self):
-        # this raises a BdbQuit exception that we are unable to catch.
+        # this raises a BdbQuit exception that we're unable to catch.
         sys.settrace(None)
 
 
 def debugger():
-    """Return the current debugger instance (if any),
-    or creates a new one."""
+    """Return the current debugger instance, or create if none."""
     rdb = _current[0]
     if rdb is None or not rdb.active:
         rdb = _current[0] = Rdb()
@@ -177,7 +187,7 @@ def debugger():
 
 
 def set_trace(frame=None):
-    """Set breakpoint at current location, or a specified frame"""
+    """Set break-point at current location, or a specified frame."""
     if frame is None:
         frame = _frame().f_back
     return debugger().set_trace(frame)
