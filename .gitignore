@@ -1,4 +1,4 @@
-venv
+venv/
 qfxscraper.py
 qfx.sh
 celerybeat-schedule

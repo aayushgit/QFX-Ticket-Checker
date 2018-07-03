@@ -1,7 +1,7 @@
-from __future__ import absolute_import, unicode_literals
-from .models import NowShowing
-from .models import Emails
-from celery import task
+from celery.schedules import crontab
+from celery.task import periodic_task
+
+from .models import NowShowing, Emails
 from django.core.mail import send_mass_mail
 from bs4 import BeautifulSoup
 import urllib.request
@@ -17,14 +17,22 @@ def sendEmail(movietitle):
             movie = NowShowing.objects.get(movie_title=mv)
             content = content + mv + " Book at:  " + movie.movie_link
 
+        mailList=[]
+
         emails = Emails.objects.all()
-        mailList = emails.email
+        for mail in emails:
+            mailList.append(mail.email)
         for i in range(len(mailList)):
-            messages[i] = (subject, content, mailList[i])
+            messages = (subject, content, mailList[i])
 
         send_mass_mail(messages, fail_silently=False)
 
-@task()
+@periodic_task(
+    run_every=(crontab(minute='*/1')),
+    name="getNowShowing",
+    ignore_result=True
+)
+
 def getNowShowing():
     opener = AppURLOpener()
     home_page = 'https://www.qfxcinemas.com'
@@ -52,7 +60,10 @@ def getNowShowing():
     for m in nowShowing:
         title = m['title']
         link = m['link']
-        now = NowShowing.objects.get(movie_title=title)
+        try:
+            now = NowShowing.objects.get(movie_title=title)
+        except NowShowing.DoesNotExist:
+            now = None
         if not now:
             new = NowShowing()
             new.movie_title = title
