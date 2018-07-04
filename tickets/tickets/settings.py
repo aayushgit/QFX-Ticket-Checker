@@ -132,10 +132,4 @@ CELERY_ACCEPT_CONTENT = ['application/json']
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Asia/Kathmandu'
-CELERY_BEAT_SCHEDULE = {
-    'add':{
-        'task': 'QFXTickets.tasks.add',
-        'schedule': crontab(minute=1)
-    }
-}
 
