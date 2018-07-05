@@ -1,10 +1,8 @@
 import celery
-from celery import current_app
 from celery.schedules import crontab
 from celery.task import periodic_task
-
 from .models import NowShowing, Emails
-from django.core.mail import EmailMultiAlternatives
+from django.core.mail import send_mail
 from bs4 import BeautifulSoup
 import urllib.request
 
@@ -12,26 +10,25 @@ import urllib.request
 class AppURLOpener(urllib.request.FancyURLopener):
     version = "Mozilla/5.0"
 
-
+# task to send email to all subscribers about the booking available for new movies
 @celery.task
 def sendEmail(movietitle):
     from_email = "saneprijal@gmail.com"
     subject = "New Movie Arrival"
     content = "Movie Tickets available for: \n"
+    # set the contents
     for mv in movietitle:
         movie = NowShowing.objects.get(movie_title=mv)
         content = content + mv + " Booking link:  " + movie.movie_link + "\n"
-    print(content)
+
     mailList = []
+    # get all the subscribers' mail
     emails = Emails.objects.all()
     for mail in emails:
         mailList.append(mail.email)
 
-    print(mailList)
-
-    msg = EmailMultiAlternatives(subject, content, from_email, bcc=mailList)
-    msg.send()
-    print("Email sent")
+    # send mail to all subscribers
+    send_mail(subject, content, from_email, mailList, fail_silently=False)
 
 
 @periodic_task(
@@ -40,7 +37,6 @@ def sendEmail(movietitle):
     ignore_result=True
 )
 def getNowShowing():
-    print("Hello World")
     opener = AppURLOpener()
     home_page = 'https://www.qfxcinemas.com'
     uClient = opener.open(home_page)
@@ -58,6 +54,7 @@ def getNowShowing():
     for all_movies in movies.findAll('div', attrs={'class': 'movies'}):
         for movie in all_movies.findAll('div', attrs={'class': 'movie'}):
             a = movie.find('a', attrs={'class': 'ticket'})
+            # if the movie contains a ticket booking link then
             if a:
                 ticketlink = a['href']
                 h4 = movie.find('h4', attrs={'class': 'movie-title'})
@@ -67,16 +64,21 @@ def getNowShowing():
                 ticketbook['link'] = ticketlink
                 nowShowing.append(ticketbook.copy())
 
+            #if no ticket booking link is found, then ignore the movie
             else:
                 continue
 
+    #for each new movie available for booking
     for m in nowShowing:
         title = m['title']
         link = m['link']
+        #check if the movie is already stored
         try:
             now = NowShowing.objects.get(movie_title=title)
         except NowShowing.DoesNotExist:
             now = None
+
+        #if movie information not stored previously
         if not now:
             new = NowShowing()
             new.movie_title = title
@@ -84,5 +86,8 @@ def getNowShowing():
             new.save()
 
             newmovie.append(title)
+
+    #if new movie arrved
     if newmovie:
+        #start task sendEmail
         sendEmail.delay(newmovie)

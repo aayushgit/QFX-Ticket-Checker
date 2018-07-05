@@ -131,5 +131,18 @@ CELERY_RESULT_BACKEND = 'redis://localhost:6379'
 CELERY_ACCEPT_CONTENT = ['application/json']
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TASK_SERIALIZER = 'json'
+#set the appropriate time zone
 CELERY_TIMEZONE = 'Asia/Kathmandu'
+
+
+#email settings
+#Uncomment the following lines and fill with required setting
+# EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+# EMAIL_HOST = ''
+# EMAIL_PORT =
+# EMAIL_HOST_USER = None
+# EMAIL_HOST_PASSWORD = None
+
+
+
 
